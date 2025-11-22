@@ -109,7 +109,7 @@ namespace ProfControl
                         if (pickSta.IsEmpty() == false)
                             continue;
                         //如果对于某一个上料点，已经有一个未完成的上料任务存在，跳出
-                        if (TaskInfos.Any(x => x.Status != "完成" && x.FromMark == pickSta.Mark) == true)
+                        if (TaskInfos.Any(x => x.Status != "完成" && x.TaskType == TaskTypeEnum.入库任务 && x.FromMark == pickSta.Mark) == true)
                             continue;
 
                         //随机选中某一个巷道作为入库任务的放置点
@@ -145,6 +145,69 @@ namespace ProfControl
                             }
                         }
                     }
+
+                    //模拟出库任务
+                    foreach (var dropSta in DropStas)
+                    {
+                        if (dropSta.IsEmpty() == false)
+                            continue;
+                        //如果对于某一个上料点，已经有一个未完成的上料任务存在，跳出
+                        if (TaskInfos.Any(x => x.Status != "完成" && x.TaskType == TaskTypeEnum.出库任务 && x.ToMark == dropSta.Mark) == true)
+                            continue;
+
+                        //随机选中某一个巷道作为出库任务的取货点
+                        var pickPocket = pockets[rand.Next(pockets.Count)];
+                        if (pickPocket != null)
+                        {
+                            //这里需要注意的是，在没有移库任务之前，为了任务更合理，我们尽可能先取巷道内靠近外侧的货物，否则内侧货物会被外侧货物阻挡导致无法取出
+                            for (var i = pickPocket.OrderStations.Count - 1; i >= 0; i--)
+                            {
+                                //首先查询的是门口的站点，往巷道深处查询
+                                var sta = pickPocket.OrderStations[i];
+                                if (sta.CargoAreas.Count == 0)
+                                    continue;
+                                //既然是取货出库，这个站点必须有货物存在
+                                if (sta.IsEmpty() == true)
+                                    continue;
+                                //有一个需要注意的细节，如果这个巷道有一个入库任务即将执行，那么先不要出这个巷道的货物，否则可能入库后阻塞无法取出，当然移库任务完成后这些担忧都不再存在
+                                if (TaskInfos.Any(x => x.Status != "完成" && x.TaskType == TaskTypeEnum.入库任务 && x.ToMark == sta.Mark) == true)
+                                    break;
+                                    
+                                if (TaskInfos.Any(x => x.Status != "完成" && x.TaskType == TaskTypeEnum.出库任务 && x.FromMark == sta.Mark) == true)
+                                    break;
+
+                                var taskInfo = new TaskInfo();
+                                taskInfo.FromMark = sta.Mark;
+                                taskInfo.ToMark = dropSta.Mark;
+                                taskInfo.TaskType = TaskTypeEnum.出库任务;
+
+                                TaskInfos.Add(taskInfo);
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                //出库点我们需要模拟消耗
+                foreach (var dropSta in DropStas)
+                {
+                	//如果下料点不为空
+                    if (dropSta.IsEmpty() == false)
+                    {
+                    	//第一次进入，通过变量存储器存储数字5
+                        if (dropSta.Tag3 == null)
+                            dropSta.Tag3 = 5;
+                        else
+                        {
+                        	//每秒钟减少1，当小于等于0时，取走下料点所有货物
+                            dropSta.Tag3 = (int)dropSta.Tag3 - 1;
+                            if ((int)dropSta.Tag3 <= 0)
+                            {
+                                dropSta.TakeAll();
+                                dropSta.Tag3 = null;
+                            }
+                        }
+                    }
                 }
 
                 //编写不同任务的状态机，注意，还是处理未完成的任务
@@ -162,7 +225,6 @@ namespace ProfControl
                             if (pickAgv != null)
                             {
                                 info.WorkAgv = pickAgv;
-                                //这里我们可以测试一下
                                 pickAgv.GoTo(info.FromMark);
                                 info.Status = "行驶到取货点";
                             }
@@ -203,6 +265,53 @@ namespace ProfControl
                     }
                     else if (info.TaskType == TaskTypeEnum.出库任务)
                     {
+                        //任务刚开始，状态字符串为空，先找寻合适的车辆
+                        if (info.Status == "")
+                        {
+                            //被其他任务选中的Agv也最好不要再次被选择
+                            var agvs = API.按条件找一些Agv(x => TaskInfos.Any(y => y.Status != "完成" && y.WorkAgv == x) == false && x.IsFree()).ToList();
+                            var pickAgv = agvs.站点距离Agv集合中最近的一个(API.GetStation(info.FromMark));
+                            //找到了Agv
+                            if (pickAgv != null)
+                            {
+                                info.WorkAgv = pickAgv;
+                                pickAgv.GoTo(info.FromMark);
+                                info.Status = "行驶到取货点";
+                            }
+                        }
+                        else if (info.Status == "行驶到取货点")
+                        {
+                            //Agv到达取货点，并且当前导航任务已完成
+                            if (info.WorkAgv.API.On == info.FromMark && info.WorkAgv.IsFree())
+                            {
+                                API.GetStation(info.FromMark).MoveToOtherArea("货物区域1", info.WorkAgv, "货物区域1");
+                                info.Status = "取货完成";
+                            }
+                        }
+                        else if (info.Status == "取货完成")
+                        {
+                            info.WorkAgv.GoTo(info.ToMark);
+                            info.Status = "行驶到送货点";
+                        }
+                        else if (info.Status == "行驶到送货点")
+                        {
+                            //Agv到达送货点，并且当前导航任务已完成
+                            if (info.WorkAgv.API.On == info.ToMark && info.WorkAgv.IsFree())
+                            {
+                                info.WorkAgv.MoveToOtherArea("货物区域1", API.GetStation(info.ToMark), "货物区域1");
+                                info.Status = "送货完成";
+                            }
+                        }
+                        else if (info.Status == "送货完成")
+                        {
+                            info.Status = "完成";
+                        }
+
+                        if (info.WorkAgv != null)
+                        {
+                            info.WorkAgv.SetValue("状态", info.Status);
+                            info.WorkAgv.SetValue("任务类型", info.TaskType.ToString());
+                        }
                     }
                     else if (info.TaskType == TaskTypeEnum.移库任务)
                     {
@@ -252,4 +361,4 @@ namespace ProfControl
         }
 
     }
-} 
+}    
