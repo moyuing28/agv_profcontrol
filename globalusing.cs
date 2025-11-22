@@ -1,0 +1,62 @@
+global using System;
+global using System.IO;
+global using System.Reflection;
+global using System.Text;
+global using System.Threading;
+global using System.Threading.Tasks;
+global using System.Linq;
+global using System.Net;
+global using System.Timers;
+global using System.Threading.Tasks;
+global using System.Threading;
+global using System.Windows;
+global using System.Data.Common;
+global using System.Collections;
+global using System.Collections.Generic;
+global using System.Collections.ObjectModel;
+global using System.Collections.Specialized;
+global using System.ComponentModel;
+global using System.Runtime.CompilerServices;    
+
+global using Newtonsoft.Json;
+global using Newtonsoft.Json.Linq;  
+global using Microsoft.AspNetCore.Builder;
+global using Microsoft.AspNetCore.Http;
+global using ProfControl.Dispatch.PPT;
+
+global using ProfControl.PublicAPI;
+global using ProfControl.PublicAPI.WebHttp;
+global using ProfControl.Items;
+global using ProfControl.Model;
+global using ProfControl.Model.Interface;
+global using ProfControl.Model.Commu;
+global using ProfControl.Model.Commu.Stream;
+global using ProfControl.Model.Commu.Protocol;
+global using ProfControl.Model.TaskInfo;
+global using ProfControl.Model.Navigation;
+global using ProfControl.Model.Simulator;
+
+global using ProfControl.Viewer.View;
+global using ProfControl.Viewer.View.Controls;
+global using ProfControl.Dispatch.PPT;
+global using ProfControl.Modules.ScriptEditor;
+global using ProfControl.Modules.Property;
+global using ProfControl.Modules.Warning;  
+global using ProfControl.Modules.Database; 
+global using ProfControl.Modules.Database.DB; 
+global using ProfControl.Modules.Algorithm;
+
+global using static ProfControl.Model.Global;
+global using static ProfControl.Model.AppTask;
+global using static ProfControl.Model.API;
+global using static ProfControl.Viewer.View.CoreHelper;
+global using static ProfControl.Items.CargoHelper;
+global using static ProfControl.Model.Navigation.RouteHelper;
+global using static ProfControl.Dispatch.PPT.PropertyDetail;
+global using static ProfControl.Dispatch.PPT.SavePropertyDetail;
+global using static ProfControl.Modules.Algorithm.GeometryHelper;
+global using static ProfControl.Model.TaskInfo.TaskEntity.TaskFinishedEventArgs;           
+global using static ProfControl.Viewer.View.IPath;
+
+global using Global = ProfControl.Model.Global;      
+global using Task = System.Threading.Tasks.Task;
