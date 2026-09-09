@@ -72,7 +72,7 @@ namespace ProfControl
             var pickKey = pickPocket?.OrderStations.FirstOrDefault()?.Mark;
             var dropKey = dropPocket?.OrderStations.FirstOrDefault()?.Mark;
             if (string.IsNullOrEmpty(pickKey) || string.IsNullOrEmpty(dropKey) ||
-                PocketLocks.ContainsKey(pickKey) || PocketLocks.ContainsKey(dropKey))
+                PocketLocks.ContainsKey(pickKey))
             {
                 Tools.trace("CreateStationMoveTask: 起点或终点巷道已被锁定");
                 return false;
@@ -91,14 +91,11 @@ namespace ProfControl
                 RequestedAgv = string.IsNullOrWhiteSpace(agvName) ? "00" : agvName,
                 TaskType = TaskTypeEnum.移库任务,
                 LockPickPocketKey = pickKey,
-                LockDropPocketKey = pickKey == dropKey ? null : dropKey
+                DropPocketKey = dropKey
             };
 
+            if (!ReserveDropCapacity(task) || !PrepareEntrances(task)) return false;
             PocketLocks[pickKey] = task;
-            if (task.LockDropPocketKey != null)
-            {
-                PocketLocks[task.LockDropPocketKey] = task;
-            }
 
             TaskInfos.Add(task);
             Tools.trace($"CreateStationMoveTask: {fromMark} -> {toMark}, AGV={task.RequestedAgv}");
@@ -203,6 +200,7 @@ namespace ProfControl
                 {
                     FromMark = blockingStation.Mark,
                     ToMark = temporaryStation.Mark,
+                    DynamicDrop = true,
                     RequestedAgv = agvName,
                     TaskType = TaskTypeEnum.移库任务
                 });
@@ -243,9 +241,10 @@ namespace ProfControl
             }
 
             var task = queue.Peek();
+            if (TaskInfos.Count(t => t.Status != TaskStatus.Finished) >= MaxParallelMoveTask) return false;
             var fromStation = API.GetStation(task.FromMark);
             var toStation = API.GetStation(task.ToMark);
-            if (fromStation == null || toStation == null || fromStation.IsEmpty() || !toStation.IsEmpty())
+            if (fromStation == null || toStation == null || fromStation.IsEmpty())
             {
                 Tools.trace($"ActivateNextCargoTask: 子任务站点状态无效 {task.FromMark} -> {task.ToMark}");
                 return false;
@@ -254,18 +253,18 @@ namespace ProfControl
             var pickKey = fromStation.BelongPocketLines.FirstOrDefault()?.OrderStations.FirstOrDefault()?.Mark;
             var dropKey = toStation.BelongPocketLines.FirstOrDefault()?.OrderStations.FirstOrDefault()?.Mark;
             if (string.IsNullOrEmpty(pickKey) || string.IsNullOrEmpty(dropKey) ||
-                PocketLocks.ContainsKey(pickKey) || PocketLocks.ContainsKey(dropKey))
+                PocketLocks.ContainsKey(pickKey))
             {
-                Tools.trace("ActivateNextCargoTask: 子任务巷道已被锁定");
                 return false;
             }
 
+            task.DropPocketKey = dropKey;
+            if (!ReserveDropCapacity(task) || !PrepareEntrances(task)) return false;
             task.LockPickPocketKey = pickKey;
-            task.LockDropPocketKey = pickKey == dropKey ? null : dropKey;
             PocketLocks[pickKey] = task;
-            if (task.LockDropPocketKey != null) PocketLocks[task.LockDropPocketKey] = task;
             TaskInfos.Add(task);
             queue.Dequeue();
+            Tools.trace($"[批次激活] 序号={task.BatchSequence}, 取货={task.FromMark}, 卸货巷道={task.DropPocketKey}, 动态货位={task.DynamicDrop}");
             return true;
         }
     }

@@ -4,7 +4,7 @@ namespace ProfControl
     {
         #region 参数配置
         const int TaskGenerationInterval = 3;
-        const int MaxParallelMoveTask = 1; // 全局最多一个未完成的移库任务
+        const int MaxParallelMoveTask = 4; // 允许前车卸货、后车取货重叠
         const int PickDropDelay = 5;
         const bool EnableAutoTaskGeneration = false;
 
@@ -81,7 +81,7 @@ namespace ProfControl
             }
 
             // CreateMoveTask("53", "20");
-            CreateStationMoveTask("4","53", "20");
+            CreateStationMoveTask("4","53", "00"); // 自动选车，才能验证多车重叠
             StartScheduler();
             StartHttpApi();
         }
@@ -126,4 +126,5 @@ namespace ProfControl
    
  
  
- 
+   
+     

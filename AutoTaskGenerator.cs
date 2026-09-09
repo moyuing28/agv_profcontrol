@@ -112,7 +112,7 @@ namespace ProfControl
                     dropKey = dropPocket.OrderStations.First().Mark;
 
                     // 如果该 drop 巷道未被锁定，则使用它
-                    if (!PocketLocks.ContainsKey(dropKey))
+                    if (dropKey != pickKey)
                         break;
 
                     // 否则继续找下一个 drop 巷道
@@ -130,12 +130,13 @@ namespace ProfControl
                     ToMark = toSta.Mark,
                     TaskType = TaskTypeEnum.移库任务,
                     LockPickPocketKey = pickKey,
-                    LockDropPocketKey = dropKey
+                    DropPocketKey = dropKey,
+                    DynamicDrop = true
                 };
 
                 // 加锁
+                if (!ReserveDropCapacity(task) || !PrepareEntrances(task)) continue;
                 PocketLocks[pickKey] = task;
-                PocketLocks[dropKey] = task;
 
                 TaskInfos.Add(task);
                 runningTasks.Add(task);

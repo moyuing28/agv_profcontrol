@@ -20,12 +20,24 @@ namespace ProfControl
             GoHome,
             Finished,
             GoMove,
+            GoPickEntrance,
+            GoPickExit,
+            GoDropEntrance,
+            GoDropExit,
+            ExitedDrop,
         }
 
         public class TaskInfo
         {
             public string FromMark { get; set; }
             public string ToMark { get; set; }
+            public string DropPocketKey { get; set; }
+            public bool DynamicDrop { get; set; }
+            public bool DropCapacityReserved { get; set; }
+            public string PickEntranceMark { get; set; }
+            public string DropEntranceMark { get; set; }
+            public bool SamePocket { get; set; }
+            public string LastWaitReason { get; set; }
             public IAgv WorkAgv { get; set; }
             public string RequestedAgv { get; set; }
             public TaskTypeEnum TaskType { get; set; }

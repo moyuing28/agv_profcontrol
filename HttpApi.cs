@@ -40,6 +40,9 @@ namespace ProfControl
                             ["任务类型"] = task.TaskType.ToString(),
                             ["取货锁"] = task.LockPickPocketKey,
                             ["卸货锁"] = task.LockDropPocketKey,
+                            ["目标巷道"] = task.DropPocketKey,
+                            ["动态卸货位"] = task.DynamicDrop,
+                            ["容量已预留"] = task.DropCapacityReserved,
                         });
                     }
                     return Results.Text(arr.ToString());
