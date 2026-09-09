@@ -5,6 +5,7 @@ namespace ProfControl
 
         void ExecuteMoveTasks()
         {
+            UpdateParkingTrips();
 
             foreach (var info in TaskInfos
                 .Where(t => t.Status != TaskStatus.Finished))
@@ -108,26 +109,20 @@ namespace ProfControl
                         break;
 
                     case TaskStatus.ExitedDrop:
-                        // 每单必须先退出巷道并回家，到家后才结束任务。
-                        var homeStaId = info.WorkAgv.GetValue<string>("homestaID");
-                        if (string.IsNullOrWhiteSpace(homeStaId) || API.GetStation(homeStaId) == null)
-                        {
-                            Tools.trace($"AGV {info.WorkAgv.Name} 未配置有效 homestaID，保留任务，等待修正。");
-                            break;
-                        }
-                        info.WorkAgv.GoTo(homeStaId);
-                        info.Status = TaskStatus.GoHome;
+                        if (TryPark(info.WorkAgv)) info.Status = TaskStatus.GoHome;
+                        else WaitReason(info, "停车巷道暂不可进入，保持当前位置等待动态停车位");
                         break;
 
                     case TaskStatus.GoHome:
-                        if (Arrived(info, info.WorkAgv.GetValue<string>("homestaID")))
-                        {
+                        if (!parkingTrips.ContainsKey(info.WorkAgv) && info.WorkAgv.IsFree() &&
+                            parkingLanes.Any(l => l.Slots.Contains(ParkingPosition(info.WorkAgv))))
                             info.Status = TaskStatus.Finished;
-                        }
                         break;
 
+                    case TaskStatus.GoParkingExit:
+                        if (Arrived(info, info.ParkingExitMark)) FinishParkingExit(info);
+                        break;
                 }
-
                 UpdateAgvView(info);
             }
 
@@ -152,7 +147,7 @@ namespace ProfControl
             if (toStation == null) return;
 
             var availableAgvs = API.按条件找一些Agv(a =>
-                    a.IsFree() &&
+                    a.IsFree() && CanLeaveParking(a) &&
                     !TaskInfos.Any(t => t.WorkAgv == a && t.Status != TaskStatus.Finished));
 
             var agv = string.IsNullOrWhiteSpace(info.RequestedAgv) || info.RequestedAgv == "00"
@@ -164,12 +159,7 @@ namespace ProfControl
             if (agv == null) return;
 
             info.WorkAgv = agv;
-            agv.SetValue("staID", info.ToMark);
-            agv.SetValue("staAction", "move");
-            agv.GoTo(info.ToMark);
-            info.Status = TaskStatus.GoMove;
-            info.StateTime = DateTime.Now;
-            Tools.trace($"AssignMoveAgv: {agv.Name} -> {info.ToMark}");
+            StartFromParking(info, info.ToMark, TaskStatus.GoMove);
         }
 
         void AssignAgv(TaskInfo info)
@@ -179,7 +169,7 @@ namespace ProfControl
             if (!PrepareEntrances(info) || !info.DropCapacityReserved || !OwnsLock(info, info.LockPickPocketKey)) return;
 
             var availableAgvs = API.按条件找一些Agv(a =>
-                    a.IsFree() &&
+                    a.IsFree() && CanLeaveParking(a) &&
                     !TaskInfos.Any(t => t.WorkAgv == a && t.Status != TaskStatus.Finished));
 
             var agv = string.IsNullOrWhiteSpace(info.RequestedAgv) || info.RequestedAgv == "00"
@@ -191,8 +181,7 @@ namespace ProfControl
             if (agv == null) return;
 
             info.WorkAgv = agv;
-            MoveStage(info, info.PickEntranceMark, "move", TaskStatus.GoPickEntrance);
-            Tools.trace($"AssignAgv: {agv.Name} -> {info.FromMark}");
+            StartFromParking(info, info.PickEntranceMark, TaskStatus.GoPickEntrance);
         }
 
         bool Arrived(TaskInfo info, string mark)
@@ -351,13 +340,8 @@ namespace ProfControl
                 if (TaskInfos.Any(t => t.WorkAgv == agv && t.Status != TaskStatus.Finished))
                     continue;
 
-                // 如果 AGV 不在 home 站，则送它回家
-                var homeStaId = agv.GetValue<string>("homestaID");
-                if (!string.IsNullOrEmpty(homeStaId) && agv.API.On != homeStaId)
-                {
-                    agv.GoTo(homeStaId);
-                    Tools.trace($"SendFreeAgvsHome: {agv.Name} -> {homeStaId}");
-                }
+                // 动态分配停车位，停车巷道忙时保持原地，下轮重试。
+                TryPark(agv);
             }
         }
 

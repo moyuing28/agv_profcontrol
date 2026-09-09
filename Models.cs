@@ -25,12 +25,16 @@ namespace ProfControl
             GoDropEntrance,
             GoDropExit,
             ExitedDrop,
+            GoParkingExit,
         }
 
         public class TaskInfo
         {
             public string FromMark { get; set; }
             public string ToMark { get; set; }
+            public string ParkingExitMark { get; set; }
+            public string ParkingResumeMark { get; set; }
+            public TaskStatus ParkingResumeStatus { get; set; }
             public string DropPocketKey { get; set; }
             public bool DynamicDrop { get; set; }
             public bool DropCapacityReserved { get; set; }

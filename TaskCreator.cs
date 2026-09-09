@@ -246,7 +246,7 @@ namespace ProfControl
             var toStation = API.GetStation(task.ToMark);
             if (fromStation == null || toStation == null || fromStation.IsEmpty())
             {
-                Tools.trace($"ActivateNextCargoTask: 子任务站点状态无效 {task.FromMark} -> {task.ToMark}");
+                WaitReason(task, "子任务站点状态无效，等待重试");
                 return false;
             }
 

@@ -8,13 +8,16 @@ namespace ProfControl
             API.Agvs.Foreach(agv =>
             {
                 var sta = API.GetStation(agv.GetValue<string>("parkingstaID"));
+                if (sta == null) return;
                 agv.TaskKillAll();
                 agv.TakeAll();
                 agv.View.Radian = 0;
                 agv.View.Move(sta.View.KeyPoint, true);
                 agv.View.CalcBound();
                 agv.View.SafeInvalidate();
+                parkedAgvs[agv] = sta.Mark;
             });
+            LoadParkingLanes();
         }
 
     }

@@ -70,16 +70,6 @@ namespace ProfControl
 
             InitAgvParking();
 
-            // 临时测试：分别打印可取货站点和可放货站点。
-            foreach (var station in GetSelectableStations(true))
-            {
-                Tools.trace($"可取货站点={station.StationMark}, 所属巷道={station.PocketName}, 是否有货={station.HasCargo}");
-            }
-            foreach (var station in GetSelectableStations(false))
-            {
-                Tools.trace($"可放货站点={station.StationMark}, 所属巷道={station.PocketName}, 是否有货={station.HasCargo}");
-            }
-
             // CreateMoveTask("53", "20");
             CreateStationMoveTask("4","53", "00"); // 自动选车，才能验证多车重叠
             StartScheduler();
@@ -127,4 +117,4 @@ namespace ProfControl
  
  
    
-     
+             

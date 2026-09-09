@@ -7,7 +7,6 @@ namespace ProfControl
         void GenerateMoveTasks()
         {
 
-            Tools.trace($"GenerateMoveTasks");
 
             if ((DateTime.Now - _lastTaskGenTime).TotalSeconds < TaskGenerationInterval)
             {

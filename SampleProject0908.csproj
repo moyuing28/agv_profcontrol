@@ -127,6 +127,7 @@
     <Compile Include="E:\www\wwwroot\ProfControlV8Update\script\SampleProject0908\globalusing.cs" />
     <Compile Include="E:\www\wwwroot\ProfControlV8Update\script\SampleProject0908\HttpApi.cs" />
     <Compile Include="E:\www\wwwroot\ProfControlV8Update\script\SampleProject0908\Models.cs" />
+    <Compile Include="E:\www\wwwroot\ProfControlV8Update\script\SampleProject0908\ParkingDispatch.cs" />
     <Compile Include="E:\www\wwwroot\ProfControlV8Update\script\SampleProject0908\script.cs" />
     <Compile Include="E:\www\wwwroot\ProfControlV8Update\script\SampleProject0908\StationOptions.cs" />
     <Compile Include="E:\www\wwwroot\ProfControlV8Update\script\SampleProject0908\TaskCreator.cs" />
