@@ -37,7 +37,7 @@ namespace ProfControl
                         break;
 
                     case TaskStatus.GoPickEntrance:
-                        if (Arrived(info, info.PickEntranceMark) && ValidateBatchCargoBeforePick(info))
+                        if (Arrived(info, info.PickEntranceMark) && ValidateBatchPickStation(info))
                             MoveStage(info, info.FromMark, "pick", TaskStatus.GoPick);
                         break;
 
@@ -50,7 +50,7 @@ namespace ProfControl
                         break;
 
                     case TaskStatus.Picking:
-                        if (StateTimeout(info) && ValidateBatchCargoBeforePick(info))
+                        if (StateTimeout(info) && ValidateBatchPickStation(info))
                         {
                                      API.GetStation(info.FromMark)
                                          .MoveToOtherArea(GarageArea, info.WorkAgv, "车");

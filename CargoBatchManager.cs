@@ -4,8 +4,6 @@ namespace ProfControl
     {
         readonly object cargoBatchSync = new object();
         readonly List<CargoMoveBatch> cargoMoveBatches = new List<CargoMoveBatch>();
-        // 仅用于当前进程的货物身份复核；持久化恢复不能使用对象引用。
-        readonly Dictionary<string, List<object>> cargoItemSnapshots = new Dictionary<string, List<object>>();
 
         bool HasOpenCargoBatch() => cargoMoveBatches.Any(b => b.Status != CargoBatchStatus.Completed);
 
@@ -238,11 +236,6 @@ namespace ProfControl
                         WaitReason = i == 0 ? "等待调度" : "等待外侧货物搬离"
                     });
                 }
-                var snapshots = cargoStations.Select(s => API.GetAllChildren(s).Cast<object>().ToList()).ToList();
-                if (snapshots.Any(s => s.Count == 0))
-                    return RejectCargoBatch("无法读取来源货物对象，不能建立待执行清单");
-                for (var i = 0; i < batch.Items.Count; i++)
-                    cargoItemSnapshots.Add(batch.Items[i].ItemId, snapshots[i]);
                 cargoMoveBatches.Add(batch);
                 return new CargoBatchCreateResult { Success = true, Batch = batch };
             }
@@ -261,16 +254,6 @@ namespace ProfControl
             Tools.trace($"[任务等待] 第{item.PickSequence}项（取货位 {item.SourceMark}）：{reason}");
         }
 
-        bool CargoSnapshotMatches(CargoMoveItem item)
-        {
-            var station = API.GetStation(item.SourceMark);
-            if (station == null || station.IsEmpty() || !cargoItemSnapshots.TryGetValue(item.ItemId, out var expected))
-                return false;
-            var actual = API.GetAllChildren(station).Cast<object>().ToList();
-            return expected.Count > 0 && expected.Count == actual.Count &&
-                expected.All(e => actual.Any(a => object.ReferenceEquals(e, a)));
-        }
-
         void ReviewCargoItem(CargoMoveBatch batch, CargoMoveItem item, string reason)
         {
             batch.Status = CargoBatchStatus.NeedsReview;
@@ -278,15 +261,16 @@ namespace ProfControl
             SetCargoItemWaiting(item, reason);
         }
 
-        bool ValidateBatchCargoBeforePick(TaskInfo info)
+        bool ValidateBatchPickStation(TaskInfo info)
         {
             if (string.IsNullOrEmpty(info.CargoItemId)) return true;
             var batch = cargoMoveBatches.FirstOrDefault(b => b.BatchId == info.CargoBatchId);
             var item = batch?.Items.FirstOrDefault(i => i.ItemId == info.CargoItemId);
-            if (item != null && CargoSnapshotMatches(item)) return true;
+            var station = API.GetStation(info.FromMark);
+            if (item != null && station != null && !station.IsEmpty()) return true;
             // 已派车后不擅自释放资源或重发指令，留待现场核对。
             info.Status = TaskStatus.NeedsReview;
-            WaitReason(info, "来源货物与创建时不一致，暂停取货，需现场核对");
+            WaitReason(info, "任务明细丢失、来源站点不存在或已无货，暂停取货");
             if (item != null) ReviewCargoItem(batch, item, info.LastWaitReason);
             return false;
         }
@@ -304,9 +288,10 @@ namespace ProfControl
                 ReviewCargoItem(batch, item, "等待明细已有执行关联，需核对，禁止重复下发");
                 return;
             }
-            if (!CargoSnapshotMatches(item))
+            var sourceStation = API.GetStation(item.SourceMark);
+            if (sourceStation == null || sourceStation.IsEmpty())
             {
-                ReviewCargoItem(batch, item, "来源货物与创建时不一致，暂停批次，需现场核对");
+                ReviewCargoItem(batch, item, "来源站点不存在或已无货，暂停批次");
                 return;
             }
             var sourcePocket = API.GetStation(item.SourcePocketKey)?.BelongPocketLines
@@ -412,7 +397,6 @@ namespace ProfControl
                         item.Status = CargoTaskStatus.Completed;
                         item.CompletedTime = DateTime.Now;
                         item.WaitReason = null;
-                        cargoItemSnapshots.Remove(item.ItemId);
                     }
                     if (changed)
                         Tools.trace($"[任务进度] 第{item.PickSequence}/{batch.TotalCount}项｜车辆 {item.AssignedAgv}｜取货位 {item.SourceMark} → 卸货位 {item.AssignedDropMark ?? "待分配"}｜{CargoStageText(info.Status)}{(string.IsNullOrEmpty(item.WaitReason) ? "" : "｜等待原因：" + item.WaitReason)}");
