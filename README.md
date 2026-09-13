@@ -1,0 +1,128 @@
+# SampleProject0908 项目说明
+
+更新日期：2026-09-13。本文按当前目录源码整理，供维护者和 AI 理解项目。修改功能后同步更新本文；实际行为以源码及现场验证为准，不要把规划功能当作已实现功能。
+
+## 项目用途与运行环境
+
+这是 ProfControl 中运行的 C# 脚本项目，入口类为 `ProfControl.SampleProject : IAppScript`，通过 partial class 拆分文件。依赖宿主软件的地图、AGV、货物模型及 API，不是独立控制台程序。
+
+目前支持空车移动、点到点清障搬运、单条源巷道到单条目标巷道的业务批次搬运，以及动态停车。旧 `AutoTaskGenerator.cs`、`is_GoHome` 和自动生成开关已删除；新的业务批次调度由 `CargoBatchManager.cs` 实现。
+
+## 文件职责
+
+| 文件 | 职责 |
+| --- | --- |
+| `script.cs` | 配置、初始化测试场景、启动每秒调度及 HTTP 服务 |
+| `Models.cs` | 执行状态、业务批次、业务明细、查询快照和 TaskInfo |
+| `CargoBatchManager.cs` | 创建巷道业务批次、核对源货物、逐步派发、同步进度及查询 |
+| `TaskCreator.cs` | 空车移动、指定货位搬运、搬开阻挡货物的清障步骤组 |
+| `TaskExecutor.cs` | 搬运状态机、车辆分配、容量预留、卸货准入和货物巷道锁 |
+| `ParkingDispatch.cs` | 动态停车位选择、停车巷道进出互斥及可出库车辆筛选 |
+| `AgvParking.cs` | 按 parkingstaID 初始化车辆位置、登记占用并加载停车巷道 |
+| `CargoInitializer.cs` | 初始化测试货物、清理指定测试货位 |
+| `StationOptions.cs` | 查询有货站点及可选卸货站点；查询结果不等于可立即派车 |
+| `HttpApi.cs` | `/api/agvs`、`/api/tasks` 查询接口 |
+| `globalusing.cs` | 系统及宿主 API 的全局 using |
+| `project.config` / `SampleProject0908.csproj` | 宿主项目配置及 C# 编译引用、源文件清单 |
+
+## 地图和标识约定
+
+- `车库位`：货物存放站点，不是 AGV 停车位。
+- `入口`：货物巷道和停车巷道的进出口确认点；每条识别出的巷道需要唯一入口。
+- `agv停放点`：AGV 实际停车位，入口不作为停车位。
+- `01`、`02`、`03`、`04`：货物巷道子分类名称；当前巷道批次要求每个分类完整对应一条物理巷道。
+- `BelongPocketLines` 表示站点所属巷道；`OrderStations` 是从内部到门口的拓扑顺序，不要按站点编号排序。
+- 内部 `PocketKey` 使用巷道首站 Mark，不等于入口编号，也不等于子分类名称。
+- `CreatePocketMoveBatch("01", "03")` 的参数是子分类名称，不能传内部 PocketKey 或入口站点号。
+- 已验证地图示例：02 巷道为 `4 → 38 → 36 → 7 → 67`，入口 67；03 巷道为 `3 → 18 → 22 → 23 → 25`，入口 25。不可把示例编号写死为通用规则。
+- 入口到达被用于释放通行占用；地图布点必须保证在此确认时车辆已退出。途中 `API.On` 可为空，不能把空值当作已退出。
+
+## 三层任务与两类批次编号
+
+1. `CargoMoveBatch`：客户的一次巷道搬运要求，记录创建时的源货物清单。
+2. `CargoMoveItem`：每个源有货站点一条业务明细，等待时不创建执行任务，也不固定卸货位。
+3. `TaskInfo`：已落实资源和车辆的执行任务。
+
+业务关联用 `CargoBatchId`、`CargoItemId`、`TaskId`。清障步骤组用 `ClearanceBatchId`、`ClearanceSequence` 和 `PendingClearanceBatches`，不要混为一套批次。
+
+清障搬运负责搬开阻挡货物，再搬目标货物，**不包含自动搬回原位**。步骤按队列激活，但前车退出取货巷道后即可激活后续步骤，不必等前车回家。
+
+## 业务批次创建与派发
+
+调用 `CreatePocketMoveBatch(sourcePocketName, targetPocketName)` 返回 `CargoBatchCreateResult`，检查 `Success`、`Error` 和成功后的 `Batch.BatchId`。
+
+- 创建时核对分类、唯一巷道、入口、来源非空及源目标不同。
+- 当前只允许一个未完成业务批次；已有其他未完成执行任务或清障队列时拒绝创建。
+- 创建仅建立当时源货物清单和进程内对象快照，不马上派车；后来新增的货物不会自动加入原批次。
+- 调度按源巷道外侧到内侧挑选等待明细，检查外侧货物是否搬离、源锁、并行名额、目标容量和可用车辆。
+- 资源成立才关联 TaskInfo、占用取货巷道并派车；目标巷道此时可以被前车占用。
+- 创建、调度和业务查询使用 `cargoBatchSync` 协调共享状态。
+- 货物对象与创建时不一致、执行关联丢失或派车结果不确定时进入 `NeedsReview`，不擅自释放已占资源或重复派发。
+
+## 搬运状态机
+
+普通跨巷道搬运：
+
+```text
+None / 业务调度派车
+→ GoParkingExit（车辆从停车巷道出发时）
+→ GoPickEntrance → GoPick → Picking → Picked
+→ GoPickExit → GoDropEntrance → GoDrop → Dropping → Dropped
+→ GoDropExit → ExitedDrop → GoHome → Finished
+```
+
+- `Arrived` 同时检查 AGV 空闲和 `API.On == 目标Mark`，到入口后才发下一段指令，避免每秒采样漏掉快速经过的入口。
+- `Picking` / `Dropping` 当前等待 `PickDropDelay = 5` 秒并通过 `MoveToOtherArea` 转移货物模型，不能等同于已接入真实抬升/卸货完成反馈。
+- `Picked` 时申请卸货通行锁并确定可进入的卸货位，成功才离开取货位。失败则原地等待，继续持有取货锁。
+- 到取货出口释放取货锁，并在同轮下发去卸货入口的指令。后车此时可以取下一份货。
+- 卸完仍保持卸货锁，直到到达卸货出口才释放。
+- 同巷道内部搬运直接去卸货位，持续持有同一通行锁，卸完退出后释放。
+- 空车移动走 `GoMove → Finished`，不同于货物搬运流程。
+- 当前搬运车辆必须完成动态回家停车才成为 `Finished`；尚未实现卸完直接接下一单。
+
+## 容量预留与通行锁
+
+`DropCapacityReserved` 预留目标巷道容量，防止空位超分；`PocketLocks` 控制实际巷道通行，两者不可合并。
+
+- 动态任务通过 `DropPocketKey` 确定目标巷道；取得卸货锁后才填写具体 `ToMark`。
+- `DropSlots()` 从入口向内检查连续空位，排除被外侧货物挡住的内部空洞，再按深到浅选位。
+- 固定目标任务仍保留指定货位，动态任务不能抢占或挡住固定预留货位。
+- 卸货完成后解除容量预留，货位转为实际占用；卸货通行锁继续持有到出巷道。
+- 释放锁检查任务归属，并清空 TaskInfo 持锁字段，防止旧任务误删新任务的锁。
+
+## AGV 动态停车和出库
+
+`LoadParkingLanes()` 从“agv停放点”识别物理巷道、深浅顺序及唯一入口。配置异常时输出原因并禁用相关停车安排。
+
+回家时 `TryPark()` 按入口距离优先检查没有进出车辆的停车巷道，在该巷道选可进入的最深空位；外侧有车挡住的空洞不会被选中。使用 `ParkingLane.Owner` 占用巷道、`parkingTrips` 记录预留，先去入口再去停车位。`UpdateParkingTrips()` 确认停车完成后更新 `parkedAgvs`，释放 Owner。
+
+派车使用 `CanLeaveParking()` 过滤正在回家、巷道忙或外侧有 AGV 遮挡的车辆，再选择合适的近车。出库由 `StartFromParking()` 占用巷道并进入 `GoParkingExit`；确认到入口后 `FinishParkingExit()` 解除占用和停车记录，恢复搬运目标与状态。
+
+`parkingstaID` 仍用于初始化摆车；运行中回家不依赖固定 `homestaID`。停车区暂不可用时车辆保持当前位置等待，公共通道上的等待和拥堵仍依赖地图与宿主交管。
+
+## 查询和当前测试入口
+
+- `GetBatches()`：业务批次进度独立快照，最新在前。
+- `GetBatchDetail(batchId)`：全部业务明细及执行阶段快照，不存在返回 null。查询不会派车或推进状态。
+- 业务完成数以执行任务 `Finished` 为准，**包含回家停车**，不是仅卸货完成。
+- `HttpApi.cs` 当前仅映射 `/api/agvs`、`/api/tasks`，监听 `http://localhost:8088`。业务批次查询函数尚未映射为 HTTP 路由。
+- 当前初始化会清理、生成指定测试货物并按 `parkingstaID` 摆车。不能把重启脚本当作无副作用的恢复操作。
+- `script.cs` 当前运行 `TestPocketMoveBatchCreation("01", "03")`，随后查询；还每 10 秒调用 `TestCargoBatchQueries()` 输出进度。切换测试时直接调整调用，保留代码中的 API 使用示例注释。
+- 并行执行上限当前为 4，调度周期 1000 ms。
+
+## 已知边界与后续工作
+
+- `CargoMoveType.AreaToArea`、`PointToPoint` 枚举不代表已有统一业务批次创建接口；当前新批次入口只实现单巷道到单巷道。点到点清障另走 TaskCreator。
+- 业务批次、执行任务、预留和停车占用都在内存；没有持久化重启恢复。源货物核对使用对象引用，CargoId 尚未接入稳定业务货物编号。
+- 尚未提供完整的暂停、取消、NeedsReview 人工处理及恢复接口。
+- 尚未实现多业务批次并行、跨多巷道区域搬运、双向搬运循环等待检测和完整公平调度。
+- 停车位置记录依赖本脚本控制的初始化和进出流程，人工移车/外部指令后的自动对账尚未实现。
+- 既往现场已反馈入口分段、搬运重叠、动态停车效果正常；不能视为所有异常和多车场景均已验证。
+
+## 编译与验证
+
+README 是文档，不加入 csproj 的 `Compile` 项；`project.config` 的 `CompileFilter` 加入 `*.md`，避免宿主将其作为待编译文本。
+
+该项目依赖宿主 DLL 和 Windows/.NET 环境。可通过软件重新加载脚本编译；也可使用本机 Roslyn C# 编译器，引用宿主 DLL、.NET 6、ASP.NET Core 和 WindowsDesktop 程序集，对本目录全部 `.cs` 做库编译检查。单纯编译不会验证现场地图或车辆动作，也不要以运行 `Main()` 的方式做无副作用测试。
+
+修改调度后重点验证：前车卸货与后车取货重叠；卸货占用时在取货位等待；入口释放归属；容量不足不超派；外侧先出库、深处可达空位优先停车；批次异常暂停和完成统计。

@@ -3,21 +3,18 @@ namespace ProfControl
     public partial class SampleProject : IAppScript
     {
         #region 参数配置
-        const int TaskGenerationInterval = 3;
         const int MaxParallelMoveTask = 4; // 允许前车卸货、后车取货重叠
         const int PickDropDelay = 5;
-        const bool EnableAutoTaskGeneration = false;
 
         const string GarageArea = "车库位";
         List<string> 巷道子分类名称 = new List<string> { "01", "02", "03", "04" };
         #endregion
-        bool is_GoHome = false;
         //记录所有任务
         public SmartArray<TaskInfo> TaskInfos { get; set; } = new SmartArray<TaskInfo>();
 
         // 🔒 巷道锁表（Key = PocketKey，使用巷道首站Mark作为唯一标识）
         Dictionary<string, TaskInfo> PocketLocks = new Dictionary<string, TaskInfo>();
-        Dictionary<string, Queue<TaskInfo>> PendingCargoBatches = new Dictionary<string, Queue<TaskInfo>>();
+        Dictionary<string, Queue<TaskInfo>> PendingClearanceBatches = new Dictionary<string, Queue<TaskInfo>>();
 
         #region Init
 
@@ -70,9 +67,21 @@ namespace ProfControl
 
             InitAgvParking();
 
-            // CreateMoveTask("53", "20");
-            CreateStationMoveTask("4","53", "00"); // 自动选车，才能验证多车重叠
+            // ===== 留给后续 API 接入的内部函数示例，请保留注释 =====
+            // CreateMoveTask("53", "20"); // 空车移动：目标站点 Mark、车辆名称；"00" 自动选车。
+            // CreateStationMoveTask("4", "53", "00"); // 点到点搬运：起点 Mark、终点 Mark、车辆名称。
+            // var result = CreatePocketMoveBatch("01", "03"); // 巷道搬运：来源、目标子分类名称；不要传站点号。
+            // result.Success / result.Error / result.Batch.BatchId：创建结果、失败原因、成功后的批次编号。
+            // var batches = GetBatches(); // 所有批次的进度快照。
+            // var detail = GetBatchDetail("填写创建成功返回的批次编号"); // 全部明细；找不到时为 null。
+            // var pickStations = GetSelectableStations(true); // 有货的取货站点。
+            // var dropStationsForApi = GetSelectableStations(false); // 可选卸货站点。
+            // ===== 当前测试：切换时直接注释调用，不使用开关变量 =====
+            TestPocketMoveBatchCreation("01", "03"); // 按实际地图填写巷道子分类名称。
+            TestCargoBatchQueries(); // 创建后立即查询一次，检查全部等待明细。
             StartScheduler();
+            // 查询测试：每 10 秒输出最新状态，不需要时直接注释这一行。
+            API.SetInterval(tc => TestCargoBatchQueries(), 10000);
             StartHttpApi();
         }
         #endregion
@@ -83,11 +92,6 @@ namespace ProfControl
         {
             API.SetInterval(tc =>
             {
-                if (EnableAutoTaskGeneration)
-                {
-                    GenerateMoveTasks();
-                }
-
                 ExecuteMoveTasks();
             }, 1000);
         }
@@ -118,3 +122,9 @@ namespace ProfControl
  
    
              
+ 
+ 
+    
+   
+      
+    

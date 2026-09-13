@@ -5,6 +5,12 @@ namespace ProfControl
 
         void ExecuteMoveTasks()
         {
+            // 与创建入口共用锁，防止重复调度和资源检查、占用之间被其他创建请求插入。
+            lock (cargoBatchSync) ExecuteMoveTasksCore();
+        }
+
+        void ExecuteMoveTasksCore()
+        {
             UpdateParkingTrips();
 
             foreach (var info in TaskInfos
@@ -31,7 +37,7 @@ namespace ProfControl
                         break;
 
                     case TaskStatus.GoPickEntrance:
-                        if (Arrived(info, info.PickEntranceMark))
+                        if (Arrived(info, info.PickEntranceMark) && ValidateBatchCargoBeforePick(info))
                             MoveStage(info, info.FromMark, "pick", TaskStatus.GoPick);
                         break;
 
@@ -44,7 +50,7 @@ namespace ProfControl
                         break;
 
                     case TaskStatus.Picking:
-                        if (StateTimeout(info))
+                        if (StateTimeout(info) && ValidateBatchCargoBeforePick(info))
                         {
                                      API.GetStation(info.FromMark)
                                          .MoveToOtherArea(GarageArea, info.WorkAgv, "车");
@@ -126,17 +132,15 @@ namespace ProfControl
                 UpdateAgvView(info);
             }
 
-            foreach (var batchId in PendingCargoBatches.Keys.ToList())
+            foreach (var clearanceBatchId in PendingClearanceBatches.Keys.ToList())
             {
                 // 取货锁释放即可激活下一单；暂时不可用时保留队列重试。
-                ActivateNextCargoTask(batchId);
+                ActivateNextClearanceTask(clearanceBatchId);
             }
 
-            // ✅ 每次调度后，如果已进入回家模式，确保所有空闲 AGV 都被送回家
-            if (is_GoHome)
-            {
-                SendFreeAgvsHome();
-            }
+            SyncCargoBatchProgress();
+            DispatchCargoBatch();
+
         }
 
 
@@ -168,20 +172,31 @@ namespace ProfControl
             if (fromStation == null) return;
             if (!PrepareEntrances(info) || !info.DropCapacityReserved || !OwnsLock(info, info.LockPickPocketKey)) return;
 
+            var agv = FindCargoAgv(info);
+            if (agv == null)
+            {
+                WaitReason(info, "等待可用车辆");
+                return;
+            }
+
+            info.WorkAgv = agv;
+            StartFromParking(info, info.PickEntranceMark, TaskStatus.GoPickEntrance);
+        }
+
+        IAgv FindCargoAgv(TaskInfo info)
+        {
+            var fromStation = API.GetStation(info.FromMark);
+            if (fromStation == null) return null;
             var availableAgvs = API.按条件找一些Agv(a =>
                     a.IsFree() && CanLeaveParking(a) &&
                     !TaskInfos.Any(t => t.WorkAgv == a && t.Status != TaskStatus.Finished));
 
-            var agv = string.IsNullOrWhiteSpace(info.RequestedAgv) || info.RequestedAgv == "00"
+            return string.IsNullOrWhiteSpace(info.RequestedAgv) || info.RequestedAgv == "00"
                 ? availableAgvs
                     .OrderBy(a => API.Dist(a.View.KeyPoint, fromStation.View.KeyPoint))
                     .ThenBy(a => a.Name)
                     .FirstOrDefault()
                 : availableAgvs.FirstOrDefault(a => a.Name == info.RequestedAgv);
-            if (agv == null) return;
-
-            info.WorkAgv = agv;
-            StartFromParking(info, info.PickEntranceMark, TaskStatus.GoPickEntrance);
         }
 
         bool Arrived(TaskInfo info, string mark)
@@ -200,7 +215,7 @@ namespace ProfControl
         {
             if (info.LastWaitReason != reason)
             {
-                Tools.trace($"[搬运等待] {info.FromMark}->{info.ToMark}: {reason}");
+                Tools.trace($"[搬运等待] 取货位 {info.FromMark} → 卸货位 {info.ToMark ?? "待分配"}：{reason}");
                 info.LastWaitReason = reason;
             }
         }
@@ -208,7 +223,10 @@ namespace ProfControl
         bool PrepareEntrances(TaskInfo info)
         {
             var pick = API.GetStation(info.FromMark)?.BelongPocketLines.FirstOrDefault();
-            var drop = API.GetStation(info.ToMark)?.BelongPocketLines.FirstOrDefault();
+            var drop = !string.IsNullOrEmpty(info.DropPocketKey)
+                ? API.GetStation(info.DropPocketKey)?.BelongPocketLines
+                    .FirstOrDefault(p => p.OrderStations.FirstOrDefault()?.Mark == info.DropPocketKey)
+                : API.GetStation(info.ToMark)?.BelongPocketLines.FirstOrDefault();
             var sub = SubCategoryCollection.Instance["入口"] as ISubCategory;
             if (pick == null || drop == null || sub == null)
             {
@@ -270,11 +288,11 @@ namespace ProfControl
             if (string.IsNullOrEmpty(key) || !info.DropCapacityReserved) return false;
             if (PocketLocks.TryGetValue(key, out var owner) && !object.ReferenceEquals(owner, info))
             {
-                WaitReason(info, $"AGV={info.WorkAgv?.Name}在取货位={info.FromMark}等待卸货巷道={key}，占用AGV={owner.WorkAgv?.Name}");
+                WaitReason(info, $"车辆 {info.WorkAgv?.Name} 已取货，等待车辆 {owner.WorkAgv?.Name} 释放目标巷道（标识 {key}）；当前停在取货位 {info.FromMark}");
                 return false;
             }
             var slots = DropSlots(info);
-            var target = API.GetStation(info.ToMark);
+            var target = string.IsNullOrEmpty(info.ToMark) ? null : API.GetStation(info.ToMark);
             if (info.DynamicDrop && !OwnsLock(info, key))
             {
                 var fixedMarks = new HashSet<string>(TaskInfos.Where(t => !object.ReferenceEquals(t, info) && t.DropCapacityReserved && !t.DynamicDrop).Select(t => t.ToMark));
@@ -303,8 +321,11 @@ namespace ProfControl
             info.WorkAgv.SetValue("staAction", action);
             info.WorkAgv.GoTo(mark);
             info.Status = status;
+            info.LastWaitReason = null;
             info.StateTime = DateTime.Now;
-            Tools.trace($"[搬运阶段] AGV={info.WorkAgv.Name}, {info.FromMark}->{info.ToMark}, 状态={status}, 前往={mark}");
+            // 批量任务由任务进度日志统一展示，避免同一阶段重复打印。
+            if (string.IsNullOrEmpty(info.CargoItemId))
+                Tools.trace($"[搬运阶段] 车辆 {info.WorkAgv.Name}｜{CargoStageText(status)}｜前往站点 {mark}");
         }
 
         void ReleaseLock(TaskInfo info, bool pick)
@@ -327,23 +348,6 @@ namespace ProfControl
             info.WorkAgv.SetValue("任务类型", info.Status == TaskStatus.Finished ? "" : info.TaskType.ToString());
         }
 
-        /// <summary>
-        /// 将所有空闲且无任务的 AGV 送回家
-        /// </summary>
-        void SendFreeAgvsHome()
-        {
-            foreach (var agv in API.Agvs)
-            {
-                if (!agv.IsFree()) continue;
-
-                // 跳过有未完成任务（状态不是 Finished）的 AGV
-                if (TaskInfos.Any(t => t.WorkAgv == agv && t.Status != TaskStatus.Finished))
-                    continue;
-
-                // 动态分配停车位，停车巷道忙时保持原地，下轮重试。
-                TryPark(agv);
-            }
-        }
 
     }
 }

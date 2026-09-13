@@ -5,6 +5,19 @@ namespace ProfControl
 
         public bool CreateMoveTask(string toMark, string agvName = "00")
         {
+            lock (cargoBatchSync)
+            {
+                if (HasOpenCargoBatch())
+                {
+                    Tools.trace("CreateMoveTask: 当前搬运批次尚未结束");
+                    return false;
+                }
+                return CreateMoveTaskCore(toMark, agvName);
+            }
+        }
+
+        bool CreateMoveTaskCore(string toMark, string agvName)
+        {
             agvName = string.IsNullOrWhiteSpace(agvName) ? "00" : agvName;
 
             if (string.IsNullOrWhiteSpace(toMark))
@@ -48,7 +61,7 @@ namespace ProfControl
 
             if (string.IsNullOrWhiteSpace(fromMark) || string.IsNullOrWhiteSpace(toMark) || fromMark == toMark)
             {
-                Tools.trace("CreateStationMoveTask: 起点和终点无效");
+                Tools.trace("[点到点搬运] 起点和终点无效");
                 return false;
             }
 
@@ -56,14 +69,14 @@ namespace ProfControl
             var toStation = API.GetStation(toMark);
             if (fromStation == null || toStation == null || fromStation.IsEmpty() || !toStation.IsEmpty())
             {
-                Tools.trace("CreateStationMoveTask: 站点不存在或站点状态不符合要求");
+                Tools.trace("[点到点搬运] 站点不存在或站点状态不符合要求");
                 return false;
             }
 
             var runningTasks = TaskInfos.Count(t => t.Status != TaskStatus.Finished);
             if (runningTasks >= MaxParallelMoveTask)
             {
-                Tools.trace("CreateStationMoveTask: 当前任务数已达到上限");
+                Tools.trace("[点到点搬运] 当前任务数已达到上限");
                 return false;
             }
 
@@ -74,13 +87,13 @@ namespace ProfControl
             if (string.IsNullOrEmpty(pickKey) || string.IsNullOrEmpty(dropKey) ||
                 PocketLocks.ContainsKey(pickKey))
             {
-                Tools.trace("CreateStationMoveTask: 起点或终点巷道已被锁定");
+                Tools.trace("[点到点搬运] 起点或终点巷道已被锁定");
                 return false;
             }
 
             if (agvName != "00" && !API.Agvs.Any(a => a.Name == agvName))
             {
-                Tools.trace($"CreateStationMoveTask: 找不到指定 AGV {agvName}");
+                Tools.trace($"[点到点搬运] 找不到指定 AGV {agvName}");
                 return false;
             }
 
@@ -98,11 +111,24 @@ namespace ProfControl
             PocketLocks[pickKey] = task;
 
             TaskInfos.Add(task);
-            Tools.trace($"CreateStationMoveTask: {fromMark} -> {toMark}, AGV={task.RequestedAgv}");
+            Tools.trace($"[点到点搬运] {fromMark} -> {toMark}, AGV={task.RequestedAgv}");
             return true;
         }
 
         public bool CreateStationMoveTask(string targetMark, string toMark, string agvName = "00")
+        {
+            lock (cargoBatchSync)
+            {
+                if (HasOpenCargoBatch())
+                {
+                    Tools.trace("[点到点搬运] 当前搬运批次尚未结束");
+                    return false;
+                }
+                return CreateStationMoveTaskCore(targetMark, toMark, agvName);
+            }
+        }
+
+        bool CreateStationMoveTaskCore(string targetMark, string toMark, string agvName)
         {
             agvName = string.IsNullOrWhiteSpace(agvName) ? "00" : agvName;
 
@@ -111,20 +137,20 @@ namespace ProfControl
             if (targetStation == null || destinationStation == null || targetStation.IsEmpty() ||
                 !destinationStation.IsEmpty() || targetMark == toMark)
             {
-                Tools.trace("CreateClearanceMoveTask: 目标车辆或最终目标位置无效");
+                Tools.trace("[点到点搬运] 取货站点或目标货位无效");
                 return false;
             }
 
             if (TaskInfos.Any(t => t.Status != TaskStatus.Finished) ||
-                PendingCargoBatches.Count > 0)
+                PendingClearanceBatches.Count > 0)
             {
-                Tools.trace("CreateClearanceMoveTask: 当前已有任务");
+                Tools.trace("[点到点搬运] 当前已有任务");
                 return false;
             }
 
             if (agvName != "00" && !API.Agvs.Any(a => a.Name == agvName))
             {
-                Tools.trace($"CreateClearanceMoveTask: 找不到指定 AGV {agvName}");
+                Tools.trace($"[点到点搬运] 找不到指定 AGV {agvName}");
                 return false;
             }
 
@@ -133,7 +159,7 @@ namespace ProfControl
             var destinationPocket = destinationStation.BelongPocketLines.FirstOrDefault();
             if (targetPocket == null || destinationPocket == null)
             {
-                Tools.trace("CreateClearanceMoveTask: 目标站点没有所属巷道");
+                Tools.trace("[点到点搬运] 目标站点没有所属巷道");
                 return false;
             }
 
@@ -141,7 +167,7 @@ namespace ProfControl
             var targetIndex = targetStations.FindIndex(s => s.Mark == targetMark);
             if (targetIndex < 0)
             {
-                Tools.trace("CreateClearanceMoveTask: 找不到目标车在巷道中的位置");
+                Tools.trace("[点到点搬运] 找不到待搬货物在巷道中的位置");
                 return false;
             }
 
@@ -155,7 +181,7 @@ namespace ProfControl
             var reservedMarks = new HashSet<string>();
             var steps = new List<TaskInfo>();
 
-            Tools.trace($"CreateStationMoveTask: 巷道站点={string.Join(",", targetStations.Select(s => $"{s.Mark}:{(s.IsEmpty() ? "空" : "有车")}"))}");
+            Tools.trace($"[点到点搬运] 巷道站点={string.Join(",", targetStations.Select(s => $"{s.Mark}:{(s.IsEmpty() ? "空" : "有货")}"))}");
 
             var blockingStations = targetStations
                 .Skip(targetIndex + 1)
@@ -165,17 +191,17 @@ namespace ProfControl
                 .Reverse()
                 .ToList();
 
-            Tools.trace($"CreateStationMoveTask: 目标站点={targetMark}, 巷道位置={targetIndex}, 阻挡车辆数={blockingStations.Count}");
+            Tools.trace($"[点到点搬运] 目标站点={targetMark}, 巷道位置={targetIndex}, 阻挡货物数={blockingStations.Count}");
 
             if (blockingStations.Count == 0)
             {
-                Tools.trace("CreateClearanceMoveTask: 未检测到阻挡车辆，直接创建普通移库任务");
+                Tools.trace("[点到点搬运] 未检测到阻挡货物，直接创建普通移库任务");
                 return CreateSimpleStationMoveTask(targetMark, toMark, agvName);
             }
 
             foreach (var blockingStation in blockingStations)
             {
-                var temporaryStation = garageStations
+                var clearanceStation = garageStations
                     .Where(s => s.BelongPocketLines.Any(p =>
                         p.OrderStations.FirstOrDefault()?.Mark != targetPocketKey &&
                         p.OrderStations.FirstOrDefault()?.Mark != destinationPocketKey &&
@@ -189,17 +215,17 @@ namespace ProfControl
                         .FindIndex(x => x.Mark == s.Mark))
                     .FirstOrDefault();
 
-                if (temporaryStation == null)
+                if (clearanceStation == null)
                 {
-                    Tools.trace("CreateClearanceMoveTask: 没有找到其他巷道的临时空位");
+                    Tools.trace("[清障规划失败] 其他巷道没有可用于搬开阻挡货物的空位");
                     return false;
                 }
 
-                reservedMarks.Add(temporaryStation.Mark);
+                reservedMarks.Add(clearanceStation.Mark);
                 steps.Add(new TaskInfo
                 {
                     FromMark = blockingStation.Mark,
-                    ToMark = temporaryStation.Mark,
+                    ToMark = clearanceStation.Mark,
                     DynamicDrop = true,
                     RequestedAgv = agvName,
                     TaskType = TaskTypeEnum.移库任务
@@ -214,29 +240,29 @@ namespace ProfControl
                 TaskType = TaskTypeEnum.移库任务
             });
 
-            var batchId = Guid.NewGuid().ToString();
+            var clearanceBatchId = Guid.NewGuid().ToString();
             for (var i = 0; i < steps.Count; i++)
             {
-                steps[i].BatchId = batchId;
-                steps[i].BatchSequence = i + 1;
+                steps[i].ClearanceBatchId = clearanceBatchId;
+                steps[i].ClearanceSequence = i + 1;
             }
 
-            PendingCargoBatches[batchId] = new Queue<TaskInfo>(steps);
-            if (!ActivateNextCargoTask(batchId))
+            PendingClearanceBatches[clearanceBatchId] = new Queue<TaskInfo>(steps);
+            if (!ActivateNextClearanceTask(clearanceBatchId))
             {
-                PendingCargoBatches.Remove(batchId);
+                PendingClearanceBatches.Remove(clearanceBatchId);
                 return false;
             }
 
-            Tools.trace($"CreateClearanceMoveTask: {targetMark} -> {toMark}, 子任务数={steps.Count}");
+            Tools.trace($"[清障计划] 目标货物 {targetMark} -> {toMark}，共 {steps.Count} 个步骤（先搬开阻挡货物，再搬目标货物；不包含搬回原位）");
             return true;
         }
 
-        bool ActivateNextCargoTask(string batchId)
+        bool ActivateNextClearanceTask(string clearanceBatchId)
         {
-            if (!PendingCargoBatches.TryGetValue(batchId, out var queue) || queue.Count == 0)
+            if (!PendingClearanceBatches.TryGetValue(clearanceBatchId, out var queue) || queue.Count == 0)
             {
-                PendingCargoBatches.Remove(batchId);
+                PendingClearanceBatches.Remove(clearanceBatchId);
                 return true;
             }
 
@@ -246,7 +272,7 @@ namespace ProfControl
             var toStation = API.GetStation(task.ToMark);
             if (fromStation == null || toStation == null || fromStation.IsEmpty())
             {
-                WaitReason(task, "子任务站点状态无效，等待重试");
+                WaitReason(task, "清障步骤站点状态无效，等待重试");
                 return false;
             }
 
@@ -264,7 +290,7 @@ namespace ProfControl
             PocketLocks[pickKey] = task;
             TaskInfos.Add(task);
             queue.Dequeue();
-            Tools.trace($"[批次激活] 序号={task.BatchSequence}, 取货={task.FromMark}, 卸货巷道={task.DropPocketKey}, 动态货位={task.DynamicDrop}");
+            Tools.trace($"[清障步骤开始] 步骤组={task.ClearanceBatchId}, 序号={task.ClearanceSequence}, 取货={task.FromMark}, 卸货巷道={task.DropPocketKey}, 动态货位={task.DynamicDrop}");
             return true;
         }
     }
