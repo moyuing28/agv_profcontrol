@@ -80,14 +80,14 @@ namespace ProfControl
             var lane = parkingLanes.FirstOrDefault(l => l.Slots.Contains(ParkingPosition(info.WorkAgv)));
             if (lane == null)
             {
-                MoveStage(info, target, "move", next);
+                MoveStage(info, target, next);
                 return;
             }
             lane.Owner = info.WorkAgv;
             info.ParkingExitMark = lane.Gate;
             info.ParkingResumeMark = target;
             info.ParkingResumeStatus = next;
-            MoveStage(info, lane.Gate, "move", TaskStatus.GoParkingExit);
+            MoveStage(info, lane.Gate, TaskStatus.GoParkingExit);
             Tools.trace($"[停车出库] AGV={info.WorkAgv.Name}, 前往出口={lane.Gate}");
         }
 
@@ -95,7 +95,7 @@ namespace ProfControl
         {
             foreach (var lane in parkingLanes.Where(l => l.Owner == info.WorkAgv)) lane.Owner = null;
             parkedAgvs.Remove(info.WorkAgv);
-            MoveStage(info, info.ParkingResumeMark, "move", info.ParkingResumeStatus);
+            MoveStage(info, info.ParkingResumeMark, info.ParkingResumeStatus);
         }
 
         bool TryPark(IAgv agv)
@@ -113,8 +113,6 @@ namespace ProfControl
                 if (slot == null) continue;
                 lane.Owner = agv;
                 parkingTrips[agv] = new ParkingTrip { Lane = lane, Slot = slot };
-                agv.SetValue("staID", lane.Gate);
-                agv.SetValue("staAction", "move");
                 agv.GoTo(lane.Gate);
                 Tools.trace($"[动态回家] AGV={agv.Name}, 入口={lane.Gate}, 预留停车位={slot}");
                 return true;
@@ -131,8 +129,6 @@ namespace ProfControl
                 if (!agv.IsFree()) continue;
                 if (!trip.Entering && agv.API.On == trip.Lane.Gate)
                 {
-                    agv.SetValue("staID", trip.Slot);
-                    agv.SetValue("staAction", "move");
                     agv.GoTo(trip.Slot);
                     trip.Entering = true;
                 }

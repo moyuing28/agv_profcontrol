@@ -65,14 +65,14 @@ namespace ProfControl
                         if (info.SamePocket)
                             MoveStage(info, info.ToMark, "drop", TaskStatus.GoDrop);
                         else
-                            MoveStage(info, info.PickEntranceMark, "move", TaskStatus.GoPickExit);
+                            MoveStage(info, info.PickEntranceMark, TaskStatus.GoPickExit);
                         break;
 
                     case TaskStatus.GoPickExit:
                         if (Arrived(info, info.PickEntranceMark))
                         {
                             ReleaseLock(info, true);
-                            MoveStage(info, info.DropEntranceMark, "move", TaskStatus.GoDropEntrance);
+                            MoveStage(info, info.DropEntranceMark, TaskStatus.GoDropEntrance);
                         }
                         break;
 
@@ -102,7 +102,7 @@ namespace ProfControl
                         break;
 
                     case TaskStatus.Dropped:
-                        MoveStage(info, info.DropEntranceMark, "move", TaskStatus.GoDropExit);
+                        MoveStage(info, info.DropEntranceMark, TaskStatus.GoDropExit);
                         break;
 
                     case TaskStatus.GoDropExit:
@@ -319,6 +319,12 @@ namespace ProfControl
         {
             info.WorkAgv.SetValue("staID", mark);
             info.WorkAgv.SetValue("staAction", action);
+            MoveStage(info, mark, status);
+        }
+
+        // 单纯移动只下发目的地，不设置站点动作。
+        void MoveStage(TaskInfo info, string mark, TaskStatus status)
+        {
             info.WorkAgv.GoTo(mark);
             info.Status = status;
             info.LastWaitReason = null;
