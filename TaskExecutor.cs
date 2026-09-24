@@ -52,8 +52,14 @@ namespace ProfControl
                     case TaskStatus.Picking:
                         if (StateTimeout(info) && ValidateBatchPickStation(info))
                         {
-                                     API.GetStation(info.FromMark)
-                                         .MoveToOtherArea(GarageArea, info.WorkAgv, "车");
+                            var fromStation = API.GetStation(info.FromMark);
+                            var pickArea = GetStationCargoArea(fromStation, out var pickAreaError);
+                            if (pickArea == null)
+                            {
+                                WaitReason(info, $"取货位 {info.FromMark}：{pickAreaError}");
+                                break;
+                            }
+                            fromStation.MoveToOtherArea(pickArea, info.WorkAgv, "车");
                             info.Status = TaskStatus.Picked;
                             Tools.trace($"[取货完成] AGV={info.WorkAgv.Name}, 取货位={info.FromMark}, 等待申请卸货巷道={info.DropPocketKey}");
                         }
@@ -92,8 +98,14 @@ namespace ProfControl
                     case TaskStatus.Dropping:
                         if (StateTimeout(info))
                         {
-                            info.WorkAgv.MoveToOtherArea("车",
-                                API.GetStation(info.ToMark), GarageArea);
+                            var toStation = API.GetStation(info.ToMark);
+                            var dropArea = GetStationCargoArea(toStation, out var dropAreaError);
+                            if (dropArea == null)
+                            {
+                                WaitReason(info, $"卸货位 {info.ToMark}：{dropAreaError}");
+                                break;
+                            }
+                            info.WorkAgv.MoveToOtherArea("车", toStation, dropArea);
                             info.Status = TaskStatus.Dropped;
                             info.DropCapacityReserved = false;
 
@@ -144,6 +156,36 @@ namespace ProfControl
         }
 
 
+
+        // 朝向子分类名称与货物区域名称一致，每个库位只允许匹配一个朝向。
+        string GetStationCargoArea(IStation station, out string error)
+        {
+            error = null;
+            if (station == null)
+            {
+                error = "找不到站点，无法确定货物区域";
+                return null;
+            }
+
+            string area = null;
+            foreach (var areaName in GarageDirectionAreas)
+            {
+                var sub = SubCategoryCollection.Instance[areaName] as ISubCategory;
+                if (sub == null || !sub.Children.OfType<IStation>().Any(s => s.Mark == station.Mark))
+                    continue;
+
+                if (area != null)
+                {
+                    error = $"匹配多个朝向子分类（{area}、{areaName}），请只配置一个朝向";
+                    return null;
+                }
+                area = areaName;
+            }
+
+            if (area == null)
+                error = "未配置车库位朝右、车库位朝上、车库位朝左或车库位朝下子分类";
+            return area;
+        }
 
         void AssignMoveAgv(TaskInfo info)
         {

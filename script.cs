@@ -7,7 +7,18 @@ namespace ProfControl
         const int PickDropDelay = 5;
 
         const string GarageArea = "车库位";
-        List<string> 巷道子分类名称 = new List<string> { "01", "02", "03", "04" };
+        readonly string[] GarageDirectionAreas =
+        {
+            "车库位朝右", "车库位朝上", "车库位朝左", "车库位朝下"
+        };
+        List<string> 巷道子分类名称 = new List<string>
+        {
+            "01", "02", "03", "04", "05",
+            "06", "07", "08", "09", "10",
+            "11", "12", "13", "14", "15",
+            "16", "17", "18", "19", "20",
+            "21", "22", "23", "24", "25"
+        };
         #endregion
         //记录所有任务
         public SmartArray<TaskInfo> TaskInfos { get; set; } = new SmartArray<TaskInfo>();
@@ -22,27 +33,18 @@ namespace ProfControl
         {
             var targetStations = new List<IStation>
             {
-                API.GetStation("4"),
-                API.GetStation("38"),
-                API.GetStation("36"),
-                API.GetStation("7"),
-                API.GetStation("9"),
-                API.GetStation("33"),
-                API.GetStation("32"),
-                API.GetStation("20"),
-
+                API.GetStation("71"),
+                API.GetStation("72"),
+                API.GetStation("67"),
+                API.GetStation("68"),
             };
 
             var dropStations = new List<IStation>
             {
-                API.GetStation("2"),
-                API.GetStation("53"),
-                API.GetStation("54"),
-                API.GetStation("55"),
-                API.GetStation("3"),
-                API.GetStation("18"),
-                API.GetStation("22"),
-                API.GetStation("23"),
+                API.GetStation("85"),
+                API.GetStation("63"),
+                API.GetStation("16"),
+                API.GetStation("139"),
 
             };
 
@@ -77,7 +79,7 @@ namespace ProfControl
             // var pickStations = GetSelectableStations(true); // 有货的取货站点。
             // var dropStationsForApi = GetSelectableStations(false); // 可选卸货站点。
             // ===== 当前测试：切换时直接注释调用，不使用开关变量 =====
-            TestPocketMoveBatchCreation("01", "03"); // 按实际地图填写巷道子分类名称。
+            TestPocketMoveBatchCreation("06", "01"); // 按实际地图填写巷道子分类名称。
             TestCargoBatchQueries(); // 创建后立即查询一次，检查全部等待明细。
             StartScheduler();
             // 查询测试：每 10 秒输出最新状态，不需要时直接注释这一行。
@@ -127,4 +129,5 @@ namespace ProfControl
     
    
       
-            
+             
+    
