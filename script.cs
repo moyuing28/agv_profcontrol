@@ -31,6 +31,8 @@ namespace ProfControl
 
         public void Init()
         {
+            LoadMapConfiguration();
+
             var targetStations = new List<IStation>
             {
                 API.GetStation("71"),
@@ -130,4 +132,4 @@ namespace ProfControl
    
       
              
-    
+            

@@ -171,11 +171,11 @@ namespace ProfControl
                 return false;
             }
 
-            var garageSub = SubCategoryCollection.Instance[GarageArea] as ISubCategory;
+            var garageSub = GetMapCategory(GarageArea);
             if (garageSub == null) return false;
 
             var garageStations = garageSub.Children.Cast<IStation>().ToList();
-            var entranceSub = SubCategoryCollection.Instance["入口"] as ISubCategory;
+            var entranceSub = GetMapCategory("入口");
             var destinationPocketKey = destinationPocket.OrderStations.FirstOrDefault()?.Mark;
             var targetPocketKey = targetPocket.OrderStations.FirstOrDefault()?.Mark;
             var reservedMarks = new HashSet<string>();
@@ -186,7 +186,7 @@ namespace ProfControl
             var blockingStations = targetStations
                 .Skip(targetIndex + 1)
                 .Where(s => entranceSub == null ||
-                            !entranceSub.Children.Cast<IStation>().Any(e => e.Mark == s.Mark))
+                            !entranceSub.Marks.Contains(s.Mark))
                 .Where(s => !s.IsEmpty())
                 .Reverse()
                 .ToList();
@@ -207,7 +207,7 @@ namespace ProfControl
                         p.OrderStations.FirstOrDefault()?.Mark != destinationPocketKey &&
                         !PocketLocks.ContainsKey(p.OrderStations.FirstOrDefault()?.Mark)))
                     .Where(s => entranceSub == null ||
-                                !entranceSub.Children.Cast<IStation>().Any(e => e.Mark == s.Mark))
+                                !entranceSub.Marks.Contains(s.Mark))
                     .Where(s => s.IsEmpty() && !reservedMarks.Contains(s.Mark))
                     .OrderBy(s => s.BelongPocketLines
                         .SelectMany(p => p.OrderStations)

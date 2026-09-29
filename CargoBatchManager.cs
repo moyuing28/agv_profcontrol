@@ -129,49 +129,6 @@ namespace ProfControl
             }
         }
 
-        bool TryResolveCargoPocket(string name, out string key, out string error)
-        {
-            key = null;
-            error = null;
-            if (string.IsNullOrWhiteSpace(name))
-            {
-                error = "巷道子分类名称不能为空";
-                return false;
-            }
-            var category = SubCategoryCollection.Instance[name] as ISubCategory;
-            var garage = SubCategoryCollection.Instance[GarageArea] as ISubCategory;
-            var entrances = SubCategoryCollection.Instance["入口"] as ISubCategory;
-            if (category == null || garage == null || entrances == null)
-            {
-                error = $"找不到巷道子分类 {name}，或缺少车库位、入口分类";
-                return false;
-            }
-            var marks = new HashSet<string>(category.Children.OfType<IStation>().Select(s => s.Mark));
-            var garageMarks = new HashSet<string>(garage.Children.OfType<IStation>().Select(s => s.Mark));
-            var gates = new HashSet<string>(entrances.Children.OfType<IStation>().Select(s => s.Mark));
-            var stations = category.Children.OfType<IStation>()
-                .Where(s => garageMarks.Contains(s.Mark) && !gates.Contains(s.Mark)).ToList();
-            var pockets = stations.SelectMany(s => s.BelongPocketLines).Distinct().ToList();
-            if (stations.Count == 0 || pockets.Count != 1)
-            {
-                error = $"子分类 {name} 必须对应一条明确的货物巷道；当前不能将多条物理巷道当作一条处理";
-                return false;
-            }
-            // 不允许只选了半条巷道，却把分类之外的货物也搬走或放入分类之外。
-            if (pockets[0].OrderStations.Any(s => garageMarks.Contains(s.Mark) && !gates.Contains(s.Mark) && !marks.Contains(s.Mark)))
-            {
-                error = $"子分类 {name} 未包含该巷道的全部车库货位，请检查分类配置";
-                return false;
-            }
-            key = pockets[0].OrderStations.FirstOrDefault()?.Mark;
-            if (string.IsNullOrEmpty(key))
-            {
-                error = $"子分类 {name} 对应的巷道没有站点";
-                return false;
-            }
-            return true;
-        }
-
         // 站点 Key 只在内部沿用，保持巷道锁、容量预留的现有实现。
         CargoBatchCreateResult CreatePocketMoveBatchCore(string sourcePocketKey, string targetPocketKey,
             string sourcePocketName, string targetPocketName)
@@ -187,36 +144,16 @@ namespace ProfControl
                 if (TaskInfos.Any(t => t.Status != TaskStatus.Finished) || PendingClearanceBatches.Count > 0)
                     return RejectCargoBatch("当前已有执行任务或清障队列，请完成后再创建批次");
 
-                var sourcePockets = API.GetStation(sourcePocketKey)?.BelongPocketLines
-                    .Where(p => p.OrderStations.FirstOrDefault()?.Mark == sourcePocketKey).ToList();
-                var targetPockets = API.GetStation(targetPocketKey)?.BelongPocketLines
-                    .Where(p => p.OrderStations.FirstOrDefault()?.Mark == targetPocketKey).ToList();
-                if (sourcePockets == null || sourcePockets.Count != 1 ||
-                    targetPockets == null || targetPockets.Count != 1)
-                    return RejectCargoBatch("找不到唯一的来源或目标巷道，请使用巷道首站 Mark");
+                var sourcePocket = GetCargoPocket(sourcePocketKey);
+                var targetPocket = GetCargoPocket(targetPocketKey);
+                if (sourcePocket == null || targetPocket == null)
+                    return RejectCargoBatch("找不到来源或目标巷道配置");
+                if (sourcePocket.Error != null || targetPocket.Error != null)
+                    return RejectCargoBatch(sourcePocket.Error ?? targetPocket.Error);
 
-                var garage = SubCategoryCollection.Instance[GarageArea] as ISubCategory;
-                var entrances = SubCategoryCollection.Instance["入口"] as ISubCategory;
-                if (garage == null || entrances == null)
-                    return RejectCargoBatch("缺少车库位或入口分类");
-                var garageMarks = new HashSet<string>(garage.Children.OfType<IStation>().Select(s => s.Mark));
-                var entranceMarks = new HashSet<string>(entrances.Children.OfType<IStation>().Select(s => s.Mark));
-                var sourceStations = sourcePockets[0].OrderStations.ToList();
-                var targetStations = targetPockets[0].OrderStations.ToList();
-                if (sourceStations.Where(s => entranceMarks.Contains(s.Mark)).Select(s => s.Mark).Distinct().Count() != 1 ||
-                    targetStations.Where(s => entranceMarks.Contains(s.Mark)).Select(s => s.Mark).Distinct().Count() != 1)
-                    return RejectCargoBatch("来源和目标巷道必须各有一个入口");
-                if (!targetStations.Any(s => garageMarks.Contains(s.Mark) && !entranceMarks.Contains(s.Mark)))
-                    return RejectCargoBatch("目标巷道没有车库货位");
-
-                var cargoStations = sourceStations
-                    .Where(s => garageMarks.Contains(s.Mark) && !entranceMarks.Contains(s.Mark) && !s.IsEmpty())
-                    .Reverse().ToList();
+                var cargoStations = sourcePocket.Slots.Where(s => !s.IsEmpty()).Reverse().ToList();
                 if (cargoStations.Count == 0)
                     return RejectCargoBatch("来源巷道没有待搬运货物");
-                if (cargoStations.Select(s => s.Mark).Distinct().Count() != cargoStations.Count)
-                    return RejectCargoBatch("来源巷道包含重复货位，请检查地图配置");
-
                 var batch = new CargoMoveBatch
                 {
                     MoveType = CargoMoveType.PocketToPocket,
@@ -294,22 +231,21 @@ namespace ProfControl
                 ReviewCargoItem(batch, item, "来源站点不存在或已无货，暂停批次");
                 return;
             }
-            var sourcePocket = API.GetStation(item.SourcePocketKey)?.BelongPocketLines
-                .FirstOrDefault(p => p.OrderStations.FirstOrDefault()?.Mark == item.SourcePocketKey);
-            var entrances = SubCategoryCollection.Instance["入口"] as ISubCategory;
-            if (sourcePocket == null || entrances == null)
+            var sourcePocket = GetCargoPocket(item.SourcePocketKey);
+            var entrances = GetMapCategory("入口");
+            if (sourcePocket == null || sourcePocket.Error != null || entrances == null)
             {
                 ReviewCargoItem(batch, item, "来源巷道或入口配置丢失");
                 return;
             }
-            var sourceStations = sourcePocket.OrderStations.ToList();
+            var sourceStations = sourcePocket.Stations;
             var sourceIndex = sourceStations.FindIndex(s => s.Mark == item.SourceMark);
             if (sourceIndex < 0)
             {
                 ReviewCargoItem(batch, item, "来源货位已不属于原巷道");
                 return;
             }
-            var gates = new HashSet<string>(entrances.Children.OfType<IStation>().Select(s => s.Mark));
+            var gates = entrances.Marks;
             if (sourceStations.Skip(sourceIndex + 1).Any(s => !gates.Contains(s.Mark) && !s.IsEmpty()))
             {
                 SetCargoItemWaiting(item, "等待外侧货物搬离");

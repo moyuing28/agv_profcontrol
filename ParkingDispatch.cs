@@ -21,16 +21,16 @@ namespace ProfControl
 
         void LoadParkingLanes()
         {
-            var sub = SubCategoryCollection.Instance["agv停放点"] as ISubCategory;
-            var gates = SubCategoryCollection.Instance["入口"] as ISubCategory;
+            var sub = GetMapCategory("agv停放点");
+            var gates = GetMapCategory("入口");
             if (sub == null || gates == null)
             {
                 Tools.trace("[停车配置] 缺少 agv停放点 或 入口 分类，暂停动态回家");
                 return;
             }
-            var slots = new HashSet<string>(sub.Children.OfType<IStation>().Select(s => s.Mark));
+            var slots = sub.Marks;
             foreach (var slot in slots) parkingSlotMarks.Add(slot);
-            var entrances = new HashSet<string>(gates.Children.OfType<IStation>().Select(s => s.Mark));
+            var entrances = gates.Marks;
             var assigned = new HashSet<string>();
             foreach (var pocket in sub.Children.OfType<IStation>().SelectMany(s => s.BelongPocketLines).Distinct())
             {

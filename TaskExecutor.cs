@@ -167,24 +167,10 @@ namespace ProfControl
                 return null;
             }
 
-            string area = null;
-            foreach (var areaName in GarageDirectionAreas)
-            {
-                var sub = SubCategoryCollection.Instance[areaName] as ISubCategory;
-                if (sub == null || !sub.Children.OfType<IStation>().Any(s => s.Mark == station.Mark))
-                    continue;
-
-                if (area != null)
-                {
-                    error = $"匹配多个朝向子分类（{area}、{areaName}），请只配置一个朝向";
-                    return null;
-                }
-                area = areaName;
-            }
-
-            if (area == null)
-                error = "未配置车库位朝右、车库位朝上、车库位朝左或车库位朝下子分类";
-            return area;
+            if (stationCargoAreas.TryGetValue(station.Mark, out var area)) return area;
+            if (!stationCargoAreaErrors.TryGetValue(station.Mark, out error))
+                error = "站点不在有效车库货位配置中";
+            return null;
         }
 
         void AssignMoveAgv(TaskInfo info)
@@ -264,28 +250,22 @@ namespace ProfControl
 
         bool PrepareEntrances(TaskInfo info)
         {
-            var pick = API.GetStation(info.FromMark)?.BelongPocketLines.FirstOrDefault();
-            var drop = !string.IsNullOrEmpty(info.DropPocketKey)
-                ? API.GetStation(info.DropPocketKey)?.BelongPocketLines
-                    .FirstOrDefault(p => p.OrderStations.FirstOrDefault()?.Mark == info.DropPocketKey)
-                : API.GetStation(info.ToMark)?.BelongPocketLines.FirstOrDefault();
-            var sub = SubCategoryCollection.Instance["入口"] as ISubCategory;
-            if (pick == null || drop == null || sub == null)
+            var pick = GetCargoPocket(GetStationPocketKey(info.FromMark));
+            var drop = GetCargoPocket(!string.IsNullOrEmpty(info.DropPocketKey)
+                ? info.DropPocketKey : GetStationPocketKey(info.ToMark));
+            if (pick == null || drop == null)
             {
                 WaitReason(info, "找不到取卸货巷道或入口分类，不派车");
                 return false;
             }
-            var marks = new HashSet<string>(sub.Children.OfType<IStation>().Select(s => s.Mark));
-            var picks = pick.OrderStations.Where(s => marks.Contains(s.Mark)).Select(s => s.Mark).Distinct().ToList();
-            var drops = drop.OrderStations.Where(s => marks.Contains(s.Mark)).Select(s => s.Mark).Distinct().ToList();
-            if (picks.Count != 1 || drops.Count != 1)
+            if (pick.Error != null || drop.Error != null)
             {
-                WaitReason(info, $"入口不唯一：取货入口={string.Join(",", picks)}，卸货入口={string.Join(",", drops)}，不派车");
+                WaitReason(info, pick.Error ?? drop.Error);
                 return false;
             }
-            info.PickEntranceMark = picks[0];
-            info.DropEntranceMark = drops[0];
-            info.SamePocket = pick.OrderStations.First().Mark == drop.OrderStations.First().Mark;
+            info.PickEntranceMark = pick.Entrance;
+            info.DropEntranceMark = drop.Entrance;
+            info.SamePocket = pick.Key == drop.Key;
             return true;
         }
 
@@ -297,21 +277,15 @@ namespace ProfControl
 
         List<IStation> DropSlots(TaskInfo info)
         {
-            var pocket = API.GetStation(info.DropPocketKey)?.BelongPocketLines
-                .FirstOrDefault(p => p.OrderStations.FirstOrDefault()?.Mark == info.DropPocketKey);
-            var garage = SubCategoryCollection.Instance[GarageArea] as ISubCategory;
-            var entrance = SubCategoryCollection.Instance["入口"] as ISubCategory;
-            if (pocket == null || garage == null) return new List<IStation>();
-            var marks = new HashSet<string>(garage.Children.OfType<IStation>().Select(s => s.Mark));
-            var gates = new HashSet<string>(entrance == null ? new List<string>() : entrance.Children.OfType<IStation>().Select(s => s.Mark).ToList());
-            return pocket.OrderStations.Where(s => marks.Contains(s.Mark) && !gates.Contains(s.Mark))
-                .Reverse().TakeWhile(s => s.IsEmpty()).Reverse().ToList();
+            var pocket = GetCargoPocket(info.DropPocketKey);
+            if (pocket == null || pocket.Error != null) return new List<IStation>();
+            return pocket.Slots.AsEnumerable().Reverse().TakeWhile(s => s.IsEmpty()).Reverse().ToList();
         }
 
         bool ReserveDropCapacity(TaskInfo info)
         {
             if (string.IsNullOrEmpty(info.DropPocketKey))
-                info.DropPocketKey = API.GetStation(info.ToMark)?.BelongPocketLines.FirstOrDefault()?.OrderStations.FirstOrDefault()?.Mark;
+                info.DropPocketKey = GetStationPocketKey(info.ToMark);
             var slots = DropSlots(info);
             var reserved = TaskInfos.Where(t => !object.ReferenceEquals(t, info) && t.DropCapacityReserved && t.DropPocketKey == info.DropPocketKey).ToList();
             if (slots.Count <= reserved.Count || (!info.DynamicDrop &&
