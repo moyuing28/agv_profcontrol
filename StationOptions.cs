@@ -4,7 +4,7 @@ namespace ProfControl
     {
         /// <summary>
         /// 使用已校验的巷道配置，实时查询货物状态。
-        /// hasCargo=false 返回每条巷道最深的空货位，不代表可立即派车。
+        /// hasCargo=true 返回所有有货货位；false 返回所有空货位，不代表可立即派车。
         /// </summary>
         public List<SelectableStationInfo> GetSelectableStations(bool hasCargo)
         {
@@ -25,8 +25,7 @@ namespace ProfControl
                 }
                 else
                 {
-                    var station = stations.FirstOrDefault(s => s.IsEmpty());
-                    if (station != null)
+                    foreach (var station in stations.Where(s => s.IsEmpty()))
                         result.Add(new SelectableStationInfo
                         {
                             StationMark = station.Mark,
