@@ -61,6 +61,11 @@ namespace ProfControl
             public string TargetScopeId { get; set; }
             // 仅供内部调度使用，不作为 CreatePocketMoveBatch 的调用参数。
             public string TargetPocketKey { get; set; }
+            public List<string> SourcePocketNames { get; set; } = new List<string>();
+            public List<string> TargetPocketNames { get; set; } = new List<string>();
+            public List<string> SourcePocketKeys { get; set; } = new List<string>();
+            public List<string> TargetPocketKeys { get; set; } = new List<string>();
+            internal int NextSourceIndex { get; set; }
             public CargoBatchStatus Status { get; set; } = CargoBatchStatus.Waiting;
             public DateTime CreatedTime { get; set; } = DateTime.Now;
             public DateTime? CompletedTime { get; set; }
@@ -93,16 +98,30 @@ namespace ProfControl
             public DateTime? CompletedTime { get; set; }
         }
 
+        public class CargoPocketCapacity
+        {
+            public string PocketName { get; set; }
+            public string PocketKey { get; set; }
+            public int ReachableEmptyCount { get; set; }
+            public int ReservedCount { get; set; }
+            public int AvailableCount => Math.Max(0, ReachableEmptyCount - ReservedCount);
+        }
+
         public class CargoBatchCreateResult
         {
             public bool Success { get; set; }
             public string Error { get; set; }
             public CargoMoveBatch Batch { get; set; }
+            public int RequiredCount { get; set; }
+            public List<CargoPocketCapacity> TargetCapacities { get; set; } = new List<CargoPocketCapacity>();
         }
 
         // 查询结果为独立快照，修改返回对象不会修改任务池。
         public class CargoBatchSummary
         {
+            public List<string> SourcePocketNames { get; set; } = new List<string>();
+            public List<string> TargetPocketNames { get; set; } = new List<string>();
+            public List<CargoPocketCapacity> TargetCapacities { get; set; } = new List<CargoPocketCapacity>();
             public string BatchId { get; set; }
             public CargoMoveType MoveType { get; set; }
             public string SourceScopeId { get; set; }

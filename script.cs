@@ -39,9 +39,17 @@ namespace ProfControl
                 API.GetStation("72"),
                 API.GetStation("67"),
                 API.GetStation("68"),
+                API.GetStation("58"),
+                API.GetStation("59"),
+                API.GetStation("54"),
+                API.GetStation("55"),
+                API.GetStation("44"),
+                API.GetStation("45"),
+                API.GetStation("40"),
+                API.GetStation("41"),
             };
 
-            var dropStations = new List<IStation>
+            var clearStations = new List<IStation>
             {
                 API.GetStation("85"),
                 API.GetStation("63"),
@@ -50,7 +58,7 @@ namespace ProfControl
 
             };
 
-            ClearCargo(dropStations);
+            ClearCargo(clearStations);
             GenerateCargo(targetStations);
 
             //用于显示小车执行的任务类型及相关类型下的机器人状态
@@ -74,14 +82,16 @@ namespace ProfControl
             // ===== 留给后续 API 接入的内部函数示例，请保留注释 =====
             // CreateMoveTask("53", "20"); // 空车移动：目标站点 Mark、车辆名称；"00" 自动选车。
             // CreateStationMoveTask("4", "53", "00"); // 点到点搬运：起点 Mark、终点 Mark、车辆名称。
-            // var result = CreatePocketMoveBatch("01", "03"); // 巷道搬运：来源、目标子分类名称；不要传站点号。
+            // var result = CreatePocketMoveBatch(new[] { "01" }, new[] { "03" }); // 巷道搬运：来源、目标子分类名称；不要传站点号。
+            // var multiResult = CreatePocketMoveBatch(new[] { "01", "02", "03" }, new[] { "06", "07" }); // 不定长列表；目标按顺序填充。
+            // result.RequiredCount / result.TargetCapacities：待搬数量及各目标可进入空位、预留、剩余容量。
             // result.Success / result.Error / result.Batch.BatchId：创建结果、失败原因、成功后的批次编号。
             // var batches = GetBatches(); // 所有批次的进度快照。
             // var detail = GetBatchDetail("填写创建成功返回的批次编号"); // 全部明细；找不到时为 null。
             // var pickStations = GetSelectableStations(true); // 有货的取货站点。
             // var dropStationsForApi = GetSelectableStations(false); // 可选卸货站点。
             // ===== 当前测试：切换时直接注释调用，不使用开关变量 =====
-            TestPocketMoveBatchCreation("06", "01"); // 按实际地图填写巷道子分类名称。
+            TestPocketMoveBatchCreation(new[] { "06", "07", "08", "09", "10" }, new[] { "01", "02", "03" }); // 按实际地图填写巷道子分类名称。
             TestCargoBatchQueries(); // 创建后立即查询一次，检查全部等待明细。
             StartScheduler();
             // 查询测试：每 10 秒输出最新状态，不需要时直接注释这一行。
@@ -133,3 +143,4 @@ namespace ProfControl
       
              
             
+        

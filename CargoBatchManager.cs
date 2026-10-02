@@ -1,4 +1,4 @@
-namespace ProfControl
+﻿namespace ProfControl
 {
     public partial class SampleProject
     {
@@ -71,6 +71,9 @@ namespace ProfControl
             snapshot.MoveType = batch.MoveType;
             snapshot.SourceScopeId = batch.SourceScopeId;
             snapshot.TargetScopeId = batch.TargetScopeId;
+            snapshot.SourcePocketNames = batch.SourcePocketNames.ToList();
+            snapshot.TargetPocketNames = batch.TargetPocketNames.ToList();
+            snapshot.TargetCapacities = GetTargetCapacities(batch);
             snapshot.Status = batch.Status;
             snapshot.StatusText = batch.Status switch
             {
@@ -117,67 +120,94 @@ namespace ProfControl
 
         // 创建只建立内存清单；后续由调度循环激活，不在创建函数中派车。
         // 对外参数为巷道子分类名称，例如 "01"、"02"，不是站点 Mark。
-        public CargoBatchCreateResult CreatePocketMoveBatch(string sourcePocketName, string targetPocketName)
+        public CargoBatchCreateResult CreatePocketMoveBatch(IEnumerable<string> sourcePocketNames,
+            IEnumerable<string> targetPocketNames)
         {
             lock (cargoBatchSync)
             {
-                if (!TryResolveCargoPocket(sourcePocketName, out var sourceKey, out var sourceError))
-                    return RejectCargoBatch(sourceError);
-                if (!TryResolveCargoPocket(targetPocketName, out var targetKey, out var targetError))
-                    return RejectCargoBatch(targetError);
-                return CreatePocketMoveBatchCore(sourceKey, targetKey, sourcePocketName, targetPocketName);
-            }
-        }
-
-        // 站点 Key 只在内部沿用，保持巷道锁、容量预留的现有实现。
-        CargoBatchCreateResult CreatePocketMoveBatchCore(string sourcePocketKey, string targetPocketKey,
-            string sourcePocketName, string targetPocketName)
-        {
-            lock (cargoBatchSync)
-            {
-                if (string.IsNullOrWhiteSpace(sourcePocketKey) || string.IsNullOrWhiteSpace(targetPocketKey))
-                    return RejectCargoBatch("来源和目标巷道 Key 不能为空");
-                if (sourcePocketKey == targetPocketKey)
-                    return RejectCargoBatch("来源和目标不能是同一巷道");
                 if (HasOpenCargoBatch())
                     return RejectCargoBatch("当前搬运批次尚未结束，不能重复创建或创建其他批次");
                 if (TaskInfos.Any(t => t.Status != TaskStatus.Finished) || PendingClearanceBatches.Count > 0)
                     return RejectCargoBatch("当前已有执行任务或清障队列，请完成后再创建批次");
+                if (!TryResolveBatchPockets(sourcePocketNames, out var sourceNames, out var sourceKeys, out var error))
+                    return RejectCargoBatch("来源：" + error);
+                if (!TryResolveBatchPockets(targetPocketNames, out var targetNames, out var targetKeys, out error))
+                    return RejectCargoBatch("目标：" + error);
+                if (sourceKeys.Intersect(targetKeys).Any())
+                    return RejectCargoBatch("来源和目标列表不能包含同一条物理巷道");
 
-                var sourcePocket = GetCargoPocket(sourcePocketKey);
-                var targetPocket = GetCargoPocket(targetPocketKey);
-                if (sourcePocket == null || targetPocket == null)
-                    return RejectCargoBatch("找不到来源或目标巷道配置");
-                if (sourcePocket.Error != null || targetPocket.Error != null)
-                    return RejectCargoBatch(sourcePocket.Error ?? targetPocket.Error);
-
-                var cargoStations = sourcePocket.Slots.Where(s => !s.IsEmpty()).Reverse().ToList();
-                if (cargoStations.Count == 0)
-                    return RejectCargoBatch("来源巷道没有待搬运货物");
                 var batch = new CargoMoveBatch
                 {
                     MoveType = CargoMoveType.PocketToPocket,
-                    SourceScopeId = sourcePocketName,
-                    TargetScopeId = targetPocketName,
-                    TargetPocketKey = targetPocketKey
+                    SourceScopeId = string.Join(",", sourceNames),
+                    TargetScopeId = string.Join(",", targetNames),
+                    SourcePocketNames = sourceNames,
+                    TargetPocketNames = targetNames,
+                    SourcePocketKeys = sourceKeys,
+                    TargetPocketKeys = targetKeys,
+                    TargetPocketKey = targetKeys.Count == 1 ? targetKeys[0] : null
                 };
-                for (var i = 0; i < cargoStations.Count; i++)
+                foreach (var sourceKey in sourceKeys)
                 {
-                    batch.Items.Add(new CargoMoveItem
-                    {
-                        BatchId = batch.BatchId,
-                        SourcePocketKey = sourcePocketKey,
-                        SourceMark = cargoStations[i].Mark,
-                        PickSequence = i + 1,
-                        // 示例货物尚无已确认的唯一编号，不用站点号冒充 CargoId。
-                        WaitReason = i == 0 ? "等待调度" : "等待外侧货物搬离"
-                    });
+                    var cargoStations = GetCargoPocket(sourceKey).Slots.Where(s => !s.IsEmpty()).Reverse().ToList();
+                    for (var i = 0; i < cargoStations.Count; i++)
+                        batch.Items.Add(new CargoMoveItem
+                        {
+                            BatchId = batch.BatchId,
+                            SourcePocketKey = sourceKey,
+                            SourceMark = cargoStations[i].Mark,
+                            PickSequence = i + 1,
+                            WaitReason = i == 0 ? "等待调度" : "等待外侧货物搬离"
+                        });
+                }
+                if (batch.TotalCount == 0) return RejectCargoBatch("所有来源巷道均没有待搬运货物");
+                var capacities = GetTargetCapacities(batch);
+                var available = capacities.Sum(c => c.AvailableCount);
+                if (available < batch.TotalCount)
+                {
+                    var rejected = RejectCargoBatch($"目标容量不足：待搬 {batch.TotalCount} 件，可用容量 {available} 件，缺少 {batch.TotalCount - available} 个货位");
+                    rejected.RequiredCount = batch.TotalCount;
+                    rejected.TargetCapacities = capacities;
+                    return rejected;
                 }
                 cargoMoveBatches.Add(batch);
-                return new CargoBatchCreateResult { Success = true, Batch = batch };
+                return new CargoBatchCreateResult
+                {
+                    Success = true, Batch = batch, RequiredCount = batch.TotalCount, TargetCapacities = capacities
+                };
             }
         }
 
+        bool TryResolveBatchPockets(IEnumerable<string> input, out List<string> names,
+            out List<string> keys, out string error)
+        {
+            names = new List<string>();
+            keys = new List<string>();
+            error = null;
+            if (input == null) { error = "巷道列表不能为空"; return false; }
+            foreach (var value in input.ToList())
+            {
+                var name = value?.Trim();
+                if (!TryResolveCargoPocket(name, out var key, out error)) return false;
+                if (keys.Contains(key)) continue; // 按物理巷道去重，保留首次出现的顺序。
+                names.Add(name);
+                keys.Add(key);
+            }
+            if (keys.Count > 0) return true;
+            error = "巷道列表不能为空";
+            return false;
+        }
+
+        List<CargoPocketCapacity> GetTargetCapacities(CargoMoveBatch batch)
+        {
+            return batch.TargetPocketKeys.Select((key, index) => new CargoPocketCapacity
+            {
+                PocketName = batch.TargetPocketNames[index],
+                PocketKey = key,
+                ReachableEmptyCount = DropSlots(new TaskInfo { DropPocketKey = key }).Count,
+                ReservedCount = TaskInfos.Count(t => t.DropCapacityReserved && t.DropPocketKey == key)
+            }).ToList();
+        }
         CargoBatchCreateResult RejectCargoBatch(string reason)
         {
             Tools.trace($"[批次创建失败] {reason}");
@@ -217,9 +247,24 @@ namespace ProfControl
         {
             var batch = cargoMoveBatches.FirstOrDefault(b => b.Status != CargoBatchStatus.Completed);
             if (batch == null || batch.Status == CargoBatchStatus.NeedsReview) return;
-            var item = batch.Items.Where(i => i.Status == CargoTaskStatus.Waiting)
-                .OrderBy(i => i.PickSequence).FirstOrDefault();
-            if (item == null) return;
+            var start = batch.NextSourceIndex;
+            for (var offset = 0; offset < batch.SourcePocketKeys.Count; offset++)
+            {
+                var index = (start + offset) % batch.SourcePocketKeys.Count;
+                var key = batch.SourcePocketKeys[index];
+                var item = batch.Items.Where(i => i.SourcePocketKey == key && i.Status == CargoTaskStatus.Waiting)
+                    .OrderBy(i => i.PickSequence).FirstOrDefault();
+                if (item == null) continue;
+                DispatchCargoItem(batch, item);
+                if (item.Status == CargoTaskStatus.Executing)
+                    batch.NextSourceIndex = (index + 1) % batch.SourcePocketKeys.Count;
+                if (batch.Status == CargoBatchStatus.NeedsReview) return;
+                if (TaskInfos.Count(t => t.Status != TaskStatus.Finished) >= MaxParallelMoveTask) return;
+            }
+        }
+
+        void DispatchCargoItem(CargoMoveBatch batch, CargoMoveItem item)
+        {
             if (!string.IsNullOrEmpty(item.ExecutionTaskId))
             {
                 ReviewCargoItem(batch, item, "等待明细已有执行关联，需核对，禁止重复下发");
@@ -266,17 +311,24 @@ namespace ProfControl
                 CargoBatchId = batch.BatchId,
                 CargoItemId = item.ItemId,
                 FromMark = item.SourceMark,
-                DropPocketKey = batch.TargetPocketKey,
+
                 DynamicDrop = true,
                 RequestedAgv = "00",
                 LastWaitReason = item.WaitReason,
                 TaskType = TaskTypeEnum.移库任务
             };
-            if (!PrepareEntrances(info) || !ReserveDropCapacity(info))
+            // 按目标列表顺序填充；在途预留计入容量，通行锁忙不代表没有容量。
+            foreach (var key in batch.TargetPocketKeys)
             {
-                SetCargoItemWaiting(item, info.LastWaitReason);
+                info.DropPocketKey = key;
+                if (PrepareEntrances(info) && ReserveDropCapacity(info)) break;
+            }
+            if (!info.DropCapacityReserved)
+            {
+                SetCargoItemWaiting(item, "所有目标巷道均无可用容量或配置异常，等待重新检查");
                 return;
             }
+            info.LastWaitReason = null;
             var agv = FindCargoAgv(info);
             if (agv == null)
             {
@@ -306,7 +358,7 @@ namespace ProfControl
                 ReviewCargoItem(batch, item, info.LastWaitReason);
             }
             item.ExecutionStatus = info.Status;
-            Tools.trace($"[任务进度] 第{item.PickSequence}/{batch.TotalCount}项｜车辆 {agv.Name}｜取货位 {item.SourceMark} → 目标巷道 {batch.TargetScopeId}｜卸货位待分配｜{CargoStageText(info.Status)}");
+            Tools.trace($"[任务进度] 来源 {item.SourcePocketKey} 第{item.PickSequence}项｜车辆 {agv.Name}｜取货位 {item.SourceMark} → 目标巷道 {batch.TargetPocketNames[batch.TargetPocketKeys.IndexOf(info.DropPocketKey)]}｜卸货位待分配｜{CargoStageText(info.Status)}");
         }
 
         void SyncCargoBatchProgress()
@@ -335,7 +387,7 @@ namespace ProfControl
                         item.WaitReason = null;
                     }
                     if (changed)
-                        Tools.trace($"[任务进度] 第{item.PickSequence}/{batch.TotalCount}项｜车辆 {item.AssignedAgv}｜取货位 {item.SourceMark} → 卸货位 {item.AssignedDropMark ?? "待分配"}｜{CargoStageText(info.Status)}{(string.IsNullOrEmpty(item.WaitReason) ? "" : "｜等待原因：" + item.WaitReason)}");
+                        Tools.trace($"[任务进度] 来源 {item.SourcePocketKey} 第{item.PickSequence}项｜车辆 {item.AssignedAgv}｜取货位 {item.SourceMark} → 卸货位 {item.AssignedDropMark ?? "待分配"}｜{CargoStageText(info.Status)}{(string.IsNullOrEmpty(item.WaitReason) ? "" : "｜等待原因：" + item.WaitReason)}");
                     if (info.Status == TaskStatus.Finished)
                         Tools.trace($"[整批进度] 已完成 {batch.CompletedCount}/{batch.TotalCount} 项（完成包含车辆回到停车位）");
                 }
@@ -360,19 +412,19 @@ namespace ProfControl
                 var detail = GetBatchDetail(batch.BatchId);
                 if (detail == null) continue;
                 foreach (var item in detail.Items)
-                    Tools.trace($"[详情查询] 第{item.PickSequence}/{detail.TotalCount}项｜取货位 {item.SourceMark} → 卸货位 {item.AssignedDropMark ?? "待分配"}｜车辆 {item.AssignedAgv ?? "待分配"}｜{item.StatusText}｜执行阶段：{item.ExecutionStatusText ?? "尚未开始"}｜等待原因：{item.WaitReason ?? "无"}");
+                    Tools.trace($"[详情查询] 来源 {item.SourcePocketKey} 第{item.PickSequence}项｜取货位 {item.SourceMark} → 卸货位 {item.AssignedDropMark ?? "待分配"}｜车辆 {item.AssignedAgv ?? "待分配"}｜{item.StatusText}｜执行阶段：{item.ExecutionStatusText ?? "尚未开始"}｜等待原因：{item.WaitReason ?? "无"}");
             }
         }
 
         // 初始化测试直接传巷道子分类名称。
-        void TestPocketMoveBatchCreation(string sourcePocketName, string targetPocketName)
+        void TestPocketMoveBatchCreation(IEnumerable<string> sourcePocketNames, IEnumerable<string> targetPocketNames)
         {
-            var result = CreatePocketMoveBatch(sourcePocketName, targetPocketName);
+            var result = CreatePocketMoveBatch(sourcePocketNames, targetPocketNames);
             if (!result.Success) return;
             var batch = result.Batch;
             Tools.trace($"[批次创建] 共 {batch.TotalCount} 项，来源巷道 {batch.SourceScopeId} → 目标巷道 {batch.TargetScopeId}（均为子分类名称）。批次编号：{batch.BatchId}");
             foreach (var item in batch.Items)
-                Tools.trace($"[待搬清单] 第{item.PickSequence}/{batch.TotalCount}项：取货位 {item.SourceMark} → 目标巷道（标识 {batch.TargetScopeId}），卸货位待分配；{item.WaitReason}");
+                Tools.trace($"[待搬清单] 来源 {item.SourcePocketKey} 第{item.PickSequence}项：取货位 {item.SourceMark} → 目标巷道（标识 {batch.TargetScopeId}），卸货位待分配；{item.WaitReason}");
             Tools.trace("[调度准备] 清单已生成，接下来自动按取货条件派车；具体卸货位稍后逐条分配。");
         }
     }
