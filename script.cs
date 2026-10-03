@@ -49,16 +49,12 @@ namespace ProfControl
                 API.GetStation("41"),
             };
 
-            var clearStations = new List<IStation>
-            {
-                API.GetStation("85"),
-                API.GetStation("63"),
-                API.GetStation("16"),
-                API.GetStation("139"),
-
-            };
-
-            ClearCargo(clearStations);
+            // 复用已加载的“车库位”分类，清空全部车库货位后再生成测试货物。
+            var garageStations = GetMapCategory(GarageArea)?.Children;
+            if (garageStations != null)
+                ClearCargo(garageStations);
+            else
+                Tools.trace("[初始化清货] 未找到车库位分类，跳过清货");
             GenerateCargo(targetStations);
 
             //用于显示小车执行的任务类型及相关类型下的机器人状态
@@ -143,4 +139,5 @@ namespace ProfControl
       
              
             
-        
+           
+  

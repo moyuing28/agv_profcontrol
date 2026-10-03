@@ -20,7 +20,7 @@
 | `TaskExecutor.cs` | 搬运状态机、库位朝向区域解析、车辆分配、容量预留、卸货准入和货物巷道锁 |
 | `ParkingDispatch.cs` | 动态停车位选择、停车巷道进出互斥及可出库车辆筛选 |
 | `AgvParking.cs` | 按 parkingstaID 初始化车辆位置、登记占用并加载停车巷道 |
-| `CargoInitializer.cs` | 初始化测试货物、清理指定测试货位 |
+| `CargoInitializer.cs` | 初始化测试货物、清理传入站点的货物区域；初始化时接收全部车库位站点 |
 | `StationOptions.cs` | 查询有货站点及可选卸货站点；查询结果不等于可立即派车 |
 | `HttpApi.cs` | `/api/agvs`、`/api/tasks` 查询接口 |
 | `globalusing.cs` | 系统及宿主 API 的全局 using |
@@ -132,7 +132,8 @@ None / 业务调度派车
 - `GetBatchDetail(batchId)`：全部业务明细及执行阶段快照，不存在返回 null。查询不会派车或推进状态。
 - 业务完成数以执行任务 `Finished` 为准，**包含回家停车**，不是仅卸货完成。
 - `HttpApi.cs` 当前仅映射 `/api/agvs`、`/api/tasks`，监听 `http://localhost:8088`。业务批次查询函数尚未映射为 HTTP 路由。
-- 当前初始化会清理、生成指定测试货物并按 `parkingstaID` 摆车。不能把重启脚本当作无副作用的恢复操作。
+- 当前初始化在 `LoadMapConfiguration()` 后，通过 `GetMapCategory(GarageArea)?.Children` 读取已缓存的“车库位”分类站点，调用 `ClearCargo()` 清空这些站点的全部货物区域，再通过 `GenerateCargo(targetStations)` 在指定站点生成测试货物，并按 `parkingstaID` 摆车。无需手填清货站点列表，也不重新扫描地图；清货不删除站点本身。
+- “车库位”分类不存在时输出日志并跳过清货；没有货物区域的站点由 `ClearCargo()` 过滤。清货范围由“车库位”分类决定，不是地图中的所有站点。不能把重启脚本当作无副作用的恢复操作。
 - `script.cs` 当前运行 `TestPocketMoveBatchCreation(new[] { "06", "07", "08", "09", "10" }, new[] { "01", "02", "03" })`，随后查询；还每 10 秒调用 `TestCargoBatchQueries()` 输出进度。切换测试时直接调整调用，保留代码中的 API 使用示例注释。
 - `CargoInitializer.cs` 的 `GenerateCargo()` 选择站点的 `CargoAreas.First()` 放置托盘和货物，不按朝向分类选择区域。
 - 并行执行上限当前为 4，调度周期 1000 ms。
@@ -152,6 +153,8 @@ None / 业务调度派车
 README 是文档，不加入 csproj 的 `Compile` 项；`project.config` 的 `CompileFilter` 加入 `*.md`，避免宿主将其作为待编译文本。
 
 该项目依赖宿主 DLL 和 Windows/.NET 环境。可通过软件重新加载脚本编译；也可使用本机 Roslyn C# 编译器，引用宿主 DLL、.NET 6、ASP.NET Core 和 WindowsDesktop 程序集，对本目录全部 `.cs` 做库编译检查。单纯编译不会验证现场地图或车辆动作，也不要以运行 `Main()` 的方式做无副作用测试。
+
+初始化复用地图缓存清空全部车库位货物、随后生成指定测试货物的调整已通过编译，用户已反馈效果可用；该反馈仅覆盖此次初始化清货调整。
 
 多巷道搬运还需现场验证：不同容量目标的顺序分配、在途预留占满后转向下一目标、某来源被占用时其他来源继续派发，以及总容量不足时整批拒绝。隔离验证不能替代现场地图和车辆联调。
 
