@@ -176,7 +176,7 @@ namespace ProfControl
             // 巷道锁（取货 + 卸货）
             public string LockPickPocketKey { get; set; }
             public string LockDropPocketKey { get; set; }
-            // 清障步骤组：搬开阻挡货物 + 搬走目标货物，不包含自动归位。
+            // 清障步骤组：串行清理取卸货两端阻碍 + 搬走目标货物，不包含自动归位。
             public string ClearanceBatchId { get; set; }
             public int ClearanceSequence { get; set; }
         }

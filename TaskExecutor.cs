@@ -11,6 +11,7 @@ namespace ProfControl
 
         void ExecuteMoveTasksCore()
         {
+            UpdateDelayedLockReleases();
             UpdateParkingTrips();
 
             foreach (var info in TaskInfos
@@ -123,6 +124,9 @@ namespace ProfControl
                             ReleaseLock(info, true);
                             ReleaseLock(info, false);
                             info.Status = TaskStatus.ExitedDrop;
+                            // 到出口立即申请回家，不等待巷道锁延迟释放。
+                            if (TryPark(info.WorkAgv)) info.Status = TaskStatus.GoHome;
+                            else WaitReason(info, "停车巷道暂不可进入，等待动态停车位");
                         }
                         break;
 
@@ -138,7 +142,8 @@ namespace ProfControl
                         break;
 
                     case TaskStatus.GoParkingExit:
-                        if (Arrived(info, info.ParkingExitMark)) FinishParkingExit(info);
+                        if (Arrived(info, info.ParkingExitMark))
+                            FinishParkingExit(info);
                         break;
                 }
                 UpdateAgvView(info);
@@ -146,7 +151,7 @@ namespace ProfControl
 
             foreach (var clearanceBatchId in PendingClearanceBatches.Keys.ToList())
             {
-                // 取货锁释放即可激活下一单；暂时不可用时保留队列重试。
+                // 清障组按完成依赖激活下一步；暂时不可用时保留队列重试。
                 ActivateNextClearanceTask(clearanceBatchId);
             }
 
@@ -239,6 +244,25 @@ namespace ProfControl
             return (DateTime.Now - info.StateTime).TotalSeconds >= PickDropDelay;
         }
 
+        const double LaneLockReleaseDelaySeconds = 1;
+
+        readonly List<(DateTime Due, Action Release)> delayedLockReleases = new List<(DateTime, Action)>();
+
+        void DelayLockRelease(Action release)
+        {
+            delayedLockReleases.Add((DateTime.UtcNow.AddSeconds(LaneLockReleaseDelaySeconds), release));
+        }
+
+        void UpdateDelayedLockReleases()
+        {
+            var now = DateTime.UtcNow;
+            foreach (var pending in delayedLockReleases.Where(p => p.Due <= now).ToList())
+            {
+                delayedLockReleases.Remove(pending);
+                pending.Release();
+            }
+        }
+
         void WaitReason(TaskInfo info, string reason)
         {
             if (info.LastWaitReason != reason)
@@ -275,18 +299,21 @@ namespace ProfControl
                 object.ReferenceEquals(owner, info);
         }
 
-        List<IStation> DropSlots(TaskInfo info)
+        List<IStation> DropSlots(TaskInfo info, bool afterPick = false)
         {
             var pocket = GetCargoPocket(info.DropPocketKey);
             if (pocket == null || pocket.Error != null) return new List<IStation>();
-            return pocket.Slots.AsEnumerable().Reverse().TakeWhile(s => s.IsEmpty()).Reverse().ToList();
+            return pocket.Slots.AsEnumerable().Reverse().TakeWhile(s => s.IsEmpty() ||
+                (afterPick && s.Mark == info.FromMark && GetStationPocketKey(info.FromMark) == info.DropPocketKey))
+                .Reverse().ToList();
         }
 
         bool ReserveDropCapacity(TaskInfo info)
         {
             if (string.IsNullOrEmpty(info.DropPocketKey))
                 info.DropPocketKey = GetStationPocketKey(info.ToMark);
-            var slots = DropSlots(info);
+            // 点到点同巷道预留按取货后的状态计算，DropReady 仍按真实占用检查。
+            var slots = DropSlots(info, afterPick: string.IsNullOrEmpty(info.CargoItemId));
             var reserved = TaskInfos.Where(t => !object.ReferenceEquals(t, info) && t.DropCapacityReserved && t.DropPocketKey == info.DropPocketKey).ToList();
             if (slots.Count <= reserved.Count || (!info.DynamicDrop &&
                 (!slots.Any(s => s.Mark == info.ToMark) || reserved.Any(t => !t.DynamicDrop && t.ToMark == info.ToMark))))
@@ -355,8 +382,14 @@ namespace ProfControl
             var key = pick ? info.LockPickPocketKey : info.LockDropPocketKey;
             if (OwnsLock(info, key))
             {
-                PocketLocks.Remove(key);
-                Tools.trace($"[巷道释放] AGV={info.WorkAgv.Name}, 到达出口={info.WorkAgv.API.On}, 巷道Key={key}");
+                var exitMark = info.WorkAgv.API.On;
+                DelayLockRelease(() =>
+                {
+                    // 延迟期间仍由原任务持锁；只释放原任务的锁。
+                    if (!OwnsLock(info, key)) return;
+                    PocketLocks.Remove(key);
+                    Tools.trace($"[巷道延迟释放] AGV={info.WorkAgv.Name}, 确认出口={exitMark}, 巷道Key={key}");
+                });
             }
             if (pick) info.LockPickPocketKey = null;
             else info.LockDropPocketKey = null;

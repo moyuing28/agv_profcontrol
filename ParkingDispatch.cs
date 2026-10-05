@@ -93,7 +93,8 @@ namespace ProfControl
 
         void FinishParkingExit(TaskInfo info)
         {
-            foreach (var lane in parkingLanes.Where(l => l.Owner == info.WorkAgv)) lane.Owner = null;
+            foreach (var lane in parkingLanes.Where(l => l.Owner == info.WorkAgv).ToList())
+                DelayParkingLaneRelease(lane, info.WorkAgv);
             parkedAgvs.Remove(info.WorkAgv);
             MoveStage(info, info.ParkingResumeMark, info.ParkingResumeStatus);
         }
@@ -120,6 +121,14 @@ namespace ProfControl
             return false;
         }
 
+        void DelayParkingLaneRelease(ParkingLane lane, IAgv owner)
+        {
+            DelayLockRelease(() =>
+            {
+                if (lane.Owner == owner) lane.Owner = null;
+            });
+        }
+
         void UpdateParkingTrips()
         {
             foreach (var pair in parkingTrips.ToList())
@@ -135,7 +144,7 @@ namespace ProfControl
                 else if (trip.Entering && agv.API.On == trip.Slot)
                 {
                     parkedAgvs[agv] = trip.Slot;
-                    trip.Lane.Owner = null;
+                    DelayParkingLaneRelease(trip.Lane, agv);
                     parkingTrips.Remove(agv);
                     Tools.trace($"[停车完成] AGV={agv.Name}, 停车位={trip.Slot}");
                 }

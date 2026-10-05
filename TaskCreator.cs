@@ -171,10 +171,19 @@ namespace ProfControl
                 return false;
             }
 
+            var pickConfig = GetCargoPocket(GetStationPocketKey(targetMark));
+            var dropConfig = GetCargoPocket(GetStationPocketKey(toMark));
+            if (pickConfig == null || dropConfig == null || pickConfig.Error != null || dropConfig.Error != null ||
+                !pickConfig.Slots.Any(s => s.Mark == targetMark) || !dropConfig.Slots.Any(s => s.Mark == toMark) ||
+                !stationCargoAreas.ContainsKey(targetMark) || !stationCargoAreas.ContainsKey(toMark))
+            {
+                Tools.trace("[点到点搬运] 取卸货位或巷道配置无效");
+                return false;
+            }
+
             var garageSub = GetMapCategory(GarageArea);
             if (garageSub == null) return false;
 
-            var garageStations = garageSub.Children.Cast<IStation>().ToList();
             var entranceSub = GetMapCategory("入口");
             var destinationPocketKey = destinationPocket.OrderStations.FirstOrDefault()?.Mark;
             var targetPocketKey = targetPocket.OrderStations.FirstOrDefault()?.Mark;
@@ -183,13 +192,34 @@ namespace ProfControl
 
             Tools.trace($"[点到点搬运] 巷道站点={string.Join(",", targetStations.Select(s => $"{s.Mark}:{(s.IsEmpty() ? "空" : "有货")}"))}");
 
-            var blockingStations = targetStations
+            var pickBlockingStations = targetStations
                 .Skip(targetIndex + 1)
                 .Where(s => entranceSub == null ||
                             !entranceSub.Marks.Contains(s.Mark))
                 .Where(s => !s.IsEmpty())
                 .Reverse()
                 .ToList();
+
+            var destinationStations = destinationPocket.OrderStations.ToList();
+            var destinationIndex = destinationStations.FindIndex(s => s.Mark == toMark);
+            if (destinationIndex < 0) return false;
+            var dropBlockingStations = destinationStations.Skip(destinationIndex + 1)
+                .Where(s => entranceSub == null || !entranceSub.Marks.Contains(s.Mark))
+                .Where(s => s.Mark != targetMark && !s.IsEmpty()).Reverse().ToList();
+            var blockingMarks = new HashSet<string>(pickBlockingStations.Concat(dropBlockingStations).Select(s => s.Mark));
+            var blockingStations = targetPocketKey == destinationPocketKey
+                ? targetStations.AsEnumerable().Reverse().Where(s => blockingMarks.Contains(s.Mark)).ToList()
+                : dropBlockingStations.Concat(pickBlockingStations).GroupBy(s => s.Mark).Select(g => g.First()).ToList();
+            // 同巷道向深处搬运时，目标货物可能挡住更深处阻碍的取货路径。
+            // 将目标货物按外到内顺序暂存到其他巷道，最后从暂存位搬到指定卸货位。
+            var stageTarget = targetPocketKey == destinationPocketKey &&
+                blockingStations.Any(s => targetStations.FindIndex(x => x.Mark == s.Mark) < targetIndex);
+            if (stageTarget)
+                blockingStations = targetStations.AsEnumerable().Reverse()
+                    .Where(s => s.Mark == targetMark || blockingMarks.Contains(s.Mark)).ToList();
+            var finalFromMark = targetMark;
+            string stagedTargetPocketKey = null;
+            Tools.trace($"[两端清障] 取货端={pickBlockingStations.Count}, 卸货端={dropBlockingStations.Count}, 去重后={blockingStations.Count}");
 
             Tools.trace($"[点到点搬运] 目标站点={targetMark}, 巷道位置={targetIndex}, 阻挡货物数={blockingStations.Count}");
 
@@ -201,32 +231,39 @@ namespace ProfControl
 
             foreach (var blockingStation in blockingStations)
             {
-                var clearanceStation = garageStations
-                    .Where(s => s.BelongPocketLines.Any(p =>
-                        p.OrderStations.FirstOrDefault()?.Mark != targetPocketKey &&
-                        p.OrderStations.FirstOrDefault()?.Mark != destinationPocketKey &&
-                        !PocketLocks.ContainsKey(p.OrderStations.FirstOrDefault()?.Mark)))
-                    .Where(s => entranceSub == null ||
-                                !entranceSub.Marks.Contains(s.Mark))
-                    .Where(s => s.IsEmpty() && !reservedMarks.Contains(s.Mark))
-                    .OrderBy(s => s.BelongPocketLines
-                        .SelectMany(p => p.OrderStations)
-                        .ToList()
-                        .FindIndex(x => x.Mark == s.Mark))
-                    .FirstOrDefault();
+                if (!stationCargoAreas.ContainsKey(blockingStation.Mark))
+                {
+                    Tools.trace($"[清障规划失败] 阻碍货位 {blockingStation.Mark} 朝向配置无效");
+                    return false;
+                }
+                // 模拟前面步骤的存放占用，只使用入口方向连续可达的空位，从深到浅填充。
+                var clearanceStation = cargoPockets.Values
+                    .Where(p => p.Error == null && p.Key != targetPocketKey &&
+                        p.Key != destinationPocketKey && p.Key != stagedTargetPocketKey && !PocketLocks.ContainsKey(p.Key))
+                    .OrderBy(p => p.Key)
+                    .Select(p => p.Slots.AsEnumerable().Reverse()
+                        .TakeWhile(s => s.IsEmpty() && !reservedMarks.Contains(s.Mark))
+                        .Reverse().FirstOrDefault(s => stationCargoAreas.ContainsKey(s.Mark)))
+                    .FirstOrDefault(s => s != null);
 
                 if (clearanceStation == null)
                 {
-                    Tools.trace("[清障规划失败] 其他巷道没有可用于搬开阻挡货物的空位");
+                    Tools.trace("[清障规划失败] 其他巷道的可达空位不足，未创建任何搬运任务");
                     return false;
                 }
 
                 reservedMarks.Add(clearanceStation.Mark);
+                if (blockingStation.Mark == targetMark)
+                {
+                    finalFromMark = clearanceStation.Mark;
+                    // 暂存目标所在巷道不再放其他清障货物，保证最终可以取出。
+                    stagedTargetPocketKey = GetStationPocketKey(clearanceStation.Mark);
+                }
                 steps.Add(new TaskInfo
                 {
                     FromMark = blockingStation.Mark,
                     ToMark = clearanceStation.Mark,
-                    DynamicDrop = true,
+                    DynamicDrop = false,
                     RequestedAgv = agvName,
                     TaskType = TaskTypeEnum.移库任务
                 });
@@ -234,7 +271,7 @@ namespace ProfControl
 
             steps.Add(new TaskInfo
             {
-                FromMark = targetMark,
+                FromMark = finalFromMark,
                 ToMark = toMark,
                 RequestedAgv = agvName,
                 TaskType = TaskTypeEnum.移库任务
@@ -254,7 +291,7 @@ namespace ProfControl
                 return false;
             }
 
-            Tools.trace($"[清障计划] 目标货物 {targetMark} -> {toMark}，共 {steps.Count} 个步骤（先搬开阻挡货物，再搬目标货物；不包含搬回原位）");
+            Tools.trace($"[清障计划] 目标货物 {targetMark} -> {toMark}，共 {steps.Count} 个步骤（串行清理两端阻碍，再搬目标货物；不包含搬回原位）");
             return true;
         }
 
@@ -266,11 +303,14 @@ namespace ProfControl
                 return true;
             }
 
+            // 前一步完整退出巷道并结束后，才允许激活下一步。
+            if (TaskInfos.Any(t => t.ClearanceBatchId == clearanceBatchId && t.Status != TaskStatus.Finished))
+                return false;
             var task = queue.Peek();
             if (TaskInfos.Count(t => t.Status != TaskStatus.Finished) >= MaxParallelMoveTask) return false;
             var fromStation = API.GetStation(task.FromMark);
             var toStation = API.GetStation(task.ToMark);
-            if (fromStation == null || toStation == null || fromStation.IsEmpty())
+            if (fromStation == null || toStation == null || fromStation.IsEmpty() || !toStation.IsEmpty())
             {
                 WaitReason(task, "清障步骤站点状态无效，等待重试");
                 return false;

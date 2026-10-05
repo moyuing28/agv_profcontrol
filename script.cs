@@ -77,7 +77,7 @@ namespace ProfControl
 
             // ===== 留给后续 API 接入的内部函数示例，请保留注释 =====
             // CreateMoveTask("53", "20"); // 空车移动：目标站点 Mark、车辆名称；"00" 自动选车。
-            // CreateStationMoveTask("4", "53", "00"); // 点到点搬运：起点 Mark、终点 Mark、车辆名称。
+            // CreateStationMoveTask("72", "41", "00"); // 点到点搬运：起点 Mark、终点 Mark、车辆名称。
             // var result = CreatePocketMoveBatch(new[] { "01" }, new[] { "03" }); // 巷道搬运：来源、目标子分类名称；不要传站点号。
             // var multiResult = CreatePocketMoveBatch(new[] { "01", "02", "03" }, new[] { "06", "07" }); // 不定长列表；目标按顺序填充。
             // result.RequiredCount / result.TargetCapacities：待搬数量及各目标可进入空位、预留、剩余容量。
@@ -140,4 +140,4 @@ namespace ProfControl
              
             
            
-  
+                   
