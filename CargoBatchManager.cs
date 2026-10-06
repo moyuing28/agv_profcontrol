@@ -39,7 +39,19 @@
                     {
                         ItemId = i.ItemId,
                         BatchId = i.BatchId,
-                        CargoId = i.CargoId,
+                        CargoName = i.CargoName,
+                        CargoTag = i.CargoTag,
+                        TargetMark = i.TargetMark,
+                        TargetPocketNames = i.TargetPocketNames.ToList(),
+                        Steps = i.ExecutionSteps.Select((s, index) => new CargoStepDetail
+                        {
+                            TaskId = s.TaskId, Sequence = index + 1, StepType = s.StepType,
+                            CargoName = s.CargoName, CargoTag = s.CargoTag,
+                            FromMark = s.FromMark, ToMark = s.ToMark, DropPocketKey = s.DropPocketKey,
+                            AgvName = s.WorkAgv?.Name, Activated = TaskInfos.Any(t => t.TaskId == s.TaskId),
+                            Status = s.Status, StatusText = TaskInfos.Any(t => t.TaskId == s.TaskId) ? CargoStageText(s.Status) : "等待前序步骤",
+                            WaitReason = s.LastWaitReason
+                        }).ToList(),
                         SourcePocketKey = i.SourcePocketKey,
                         SourceMark = i.SourceMark,
                         PickSequence = i.PickSequence,
@@ -151,14 +163,21 @@
                 {
                     var cargoStations = GetCargoPocket(sourceKey).Slots.Where(s => !s.IsEmpty()).Reverse().ToList();
                     for (var i = 0; i < cargoStations.Count; i++)
+                    {
+                        if (!TryGetStationCargo(cargoStations[i].Mark, out var cargo, out var cargoError))
+                            return RejectCargoBatch(cargoError);
                         batch.Items.Add(new CargoMoveItem
                         {
+                            CargoName = cargo.Info.Name,
+                            CargoTag = Convert.ToString(cargo.Tag),
+                            TargetPocketNames = targetNames.ToList(),
                             BatchId = batch.BatchId,
                             SourcePocketKey = sourceKey,
                             SourceMark = cargoStations[i].Mark,
                             PickSequence = i + 1,
                             WaitReason = i == 0 ? "等待调度" : "等待外侧货物搬离"
                         });
+                    }
                 }
                 if (batch.TotalCount == 0) return RejectCargoBatch("所有来源巷道均没有待搬运货物");
                 var capacities = GetTargetCapacities(batch);
@@ -246,7 +265,7 @@
         void DispatchCargoBatch()
         {
             var batch = cargoMoveBatches.FirstOrDefault(b => b.Status != CargoBatchStatus.Completed);
-            if (batch == null || batch.Status == CargoBatchStatus.NeedsReview) return;
+            if (batch == null || batch.Status == CargoBatchStatus.NeedsReview || batch.MoveType == CargoMoveType.PointToPoint) return;
             var start = batch.NextSourceIndex;
             for (var offset = 0; offset < batch.SourcePocketKeys.Count; offset++)
             {
@@ -271,6 +290,11 @@
                 return;
             }
             var sourceStation = API.GetStation(item.SourceMark);
+            if (!IsExpectedCargoAtStation(item.SourceMark, item.CargoName, item.CargoTag))
+            {
+                ReviewCargoItem(batch, item, "指定货物不在计划源货位，需核对");
+                return;
+            }
             if (sourceStation == null || sourceStation.IsEmpty())
             {
                 ReviewCargoItem(batch, item, "来源站点不存在或已无货，暂停批次");
@@ -310,6 +334,8 @@
             {
                 CargoBatchId = batch.BatchId,
                 CargoItemId = item.ItemId,
+                CargoName = item.CargoName,
+                CargoTag = item.CargoTag,
                 FromMark = item.SourceMark,
 
                 DynamicDrop = true,
@@ -341,6 +367,7 @@
             info.LockPickPocketKey = item.SourcePocketKey;
             PocketLocks[item.SourcePocketKey] = info;
             TaskInfos.Add(info);
+            item.ExecutionSteps.Add(info);
             item.ExecutionTaskId = info.TaskId;
             item.AssignedDropPocketKey = info.DropPocketKey;
             item.AssignedAgv = agv.Name;
@@ -367,27 +394,28 @@
             {
                 foreach (var item in batch.Items.Where(i => !string.IsNullOrEmpty(i.ExecutionTaskId) && i.Status != CargoTaskStatus.Completed))
                 {
-                    var info = TaskInfos.FirstOrDefault(t => t.TaskId == item.ExecutionTaskId);
+                    var finalStep = item.ExecutionSteps.LastOrDefault();
+                    var info = item.ExecutionSteps.FirstOrDefault(t => t.Status != TaskStatus.Finished) ?? finalStep;
                     if (info == null)
                     {
                         ReviewCargoItem(batch, item, "关联执行任务丢失，需核对");
                         continue;
                     }
-                    var changed = item.ExecutionStatus != info.Status || item.AssignedDropMark != info.ToMark || item.WaitReason != info.LastWaitReason;
+                    var changed = item.ExecutionStatus != info.Status || item.AssignedDropMark != finalStep?.ToMark || item.AssignedAgv != info.WorkAgv?.Name || item.WaitReason != info.LastWaitReason;
                     item.ExecutionStatus = info.Status;
-                    item.AssignedDropMark = info.ToMark;
+                    item.AssignedDropMark = finalStep?.ToMark;
                     item.AssignedAgv = info.WorkAgv?.Name;
                     item.WaitReason = info.LastWaitReason;
                     if (info.Status == TaskStatus.NeedsReview)
                         ReviewCargoItem(batch, item, info.LastWaitReason);
-                    else if (info.Status == TaskStatus.Finished)
+                    else if (item.ExecutionSteps.Count > 0 && item.ExecutionSteps.All(s => s.Status == TaskStatus.Finished))
                     {
                         item.Status = CargoTaskStatus.Completed;
                         item.CompletedTime = DateTime.Now;
                         item.WaitReason = null;
                     }
                     if (changed)
-                        Tools.trace($"[任务进度] 来源 {item.SourcePocketKey} 第{item.PickSequence}项｜车辆 {item.AssignedAgv}｜取货位 {item.SourceMark} → 卸货位 {item.AssignedDropMark ?? "待分配"}｜{CargoStageText(info.Status)}{(string.IsNullOrEmpty(item.WaitReason) ? "" : "｜等待原因：" + item.WaitReason)}");
+                        Tools.trace($"[任务进度] 货物 {item.CargoName}/{item.CargoTag}｜当前步骤 {info.StepType}，搬运 {info.CargoName}/{info.CargoTag}｜车辆 {item.AssignedAgv}｜{info.FromMark} → {info.ToMark ?? "待分配"}｜{CargoStageText(info.Status)}{(string.IsNullOrEmpty(item.WaitReason) ? "" : "｜等待原因：" + item.WaitReason)}");
                     if (info.Status == TaskStatus.Finished)
                         Tools.trace($"[整批进度] 已完成 {batch.CompletedCount}/{batch.TotalCount} 项（完成包含车辆回到停车位）");
                 }
@@ -395,9 +423,9 @@
                 {
                     batch.Status = CargoBatchStatus.Completed;
                     batch.CompletedTime = DateTime.Now;
-                    Tools.trace($"[批次完成] 来源巷道（标识 {batch.SourceScopeId}）→ 目标巷道（标识 {batch.TargetScopeId}），全部 {batch.TotalCount} 项已完成，车辆已回到停车位。批次编号：{batch.BatchId}");
+                    Tools.trace($"[批次完成] {batch.MoveType}：{batch.SourceScopeId} → {batch.TargetScopeId}，全部 {batch.TotalCount} 项已完成，车辆已回到停车位。批次编号：{batch.BatchId}");
                     foreach (var finished in batch.Items.OrderBy(i => i.PickSequence))
-                        Tools.trace($"[搬运结果] 第{finished.PickSequence}项：取货位 {finished.SourceMark} → 卸货位 {finished.AssignedDropMark}，执行车辆 {finished.AssignedAgv}");
+                        Tools.trace($"[搬运结果] 第{finished.PickSequence}项，货物 {finished.CargoName}/{finished.CargoTag}：取货位 {finished.SourceMark} → 卸货位 {finished.AssignedDropMark}，执行车辆 {finished.AssignedAgv}");
                 }
             }
         }
@@ -408,11 +436,15 @@
             Tools.trace("[查询测试] 开始读取批次列表和详情");
             foreach (var batch in GetBatches())
             {
-                Tools.trace($"[列表查询] 巷道 {batch.SourceScopeId} → {batch.TargetScopeId}｜{batch.StatusText}｜总数 {batch.TotalCount}，等待 {batch.WaitingCount}，执行中 {batch.ExecutingCount}，完成 {batch.CompletedCount}，待核对 {batch.NeedsReviewCount}");
+                Tools.trace($"[列表查询] 批次 {batch.BatchId}，{batch.MoveType}：{batch.SourceScopeId} → {batch.TargetScopeId}｜{batch.StatusText}｜总数 {batch.TotalCount}，等待 {batch.WaitingCount}，执行中 {batch.ExecutingCount}，完成 {batch.CompletedCount}，待核对 {batch.NeedsReviewCount}");
                 var detail = GetBatchDetail(batch.BatchId);
                 if (detail == null) continue;
                 foreach (var item in detail.Items)
-                    Tools.trace($"[详情查询] 来源 {item.SourcePocketKey} 第{item.PickSequence}项｜取货位 {item.SourceMark} → 卸货位 {item.AssignedDropMark ?? "待分配"}｜车辆 {item.AssignedAgv ?? "待分配"}｜{item.StatusText}｜执行阶段：{item.ExecutionStatusText ?? "尚未开始"}｜等待原因：{item.WaitReason ?? "无"}");
+                {
+                    Tools.trace($"[详情查询] 货物={item.CargoName}/{item.CargoTag}｜起点={item.SourceMark}｜目标货位={item.TargetMark ?? "未指定"}｜目标巷道={string.Join(",", item.TargetPocketNames)}｜实际卸货位={item.AssignedDropMark ?? "待分配"}｜{item.StatusText}｜步骤={item.CompletedStepCount}/{item.TotalStepCount}｜原因={item.WaitReason ?? "无"}");
+                    foreach (var step in item.Steps)
+                        Tools.trace($"[步骤查询] 第{step.Sequence}步 {step.StepType}｜货物={step.CargoName}/{step.CargoTag}｜{step.FromMark} -> {step.ToMark ?? "待分配"}｜AGV={step.AgvName ?? "待分配"}｜{step.StatusText}｜原因={step.WaitReason ?? "无"}");
+                }
             }
         }
 

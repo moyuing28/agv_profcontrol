@@ -61,6 +61,7 @@ namespace ProfControl
                                 break;
                             }
                             fromStation.MoveToOtherArea(pickArea, info.WorkAgv, "车");
+                            if (!ValidateCargoOwner(info, info.WorkAgv)) break;
                             info.Status = TaskStatus.Picked;
                             Tools.trace($"[取货完成] AGV={info.WorkAgv.Name}, 取货位={info.FromMark}, 等待申请卸货巷道={info.DropPocketKey}");
                         }
@@ -99,6 +100,7 @@ namespace ProfControl
                     case TaskStatus.Dropping:
                         if (StateTimeout(info))
                         {
+                            if (!ValidateCargoOwner(info, info.WorkAgv)) break;
                             var toStation = API.GetStation(info.ToMark);
                             var dropArea = GetStationCargoArea(toStation, out var dropAreaError);
                             if (dropArea == null)
@@ -107,6 +109,7 @@ namespace ProfControl
                                 break;
                             }
                             info.WorkAgv.MoveToOtherArea("车", toStation, dropArea);
+                            if (!ValidateCargoOwner(info, toStation)) break;
                             info.Status = TaskStatus.Dropped;
                             info.DropCapacityReserved = false;
 

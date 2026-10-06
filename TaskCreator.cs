@@ -84,7 +84,35 @@ namespace ProfControl
                         if (!IsExpectedCargoAtStation(station.Mark, cargoName, cargoTag))
                             result.Error = "源站点必须仅有一件数量为 1 的指定货物";
                         else if (CreateStationMoveTaskCore(station.Mark, toMark, agvName, cargoName, cargoTag))
+                        {
+                            var steps = TaskInfos.Where(t => t.Status != TaskStatus.Finished)
+                                .Concat(PendingClearanceBatches.Values.SelectMany(q => q)).ToList();
+                            var batch = new CargoMoveBatch
+                            {
+                                MoveType = CargoMoveType.PointToPoint,
+                                SourceScopeId = station.Mark, TargetScopeId = toMark,
+                                Status = CargoBatchStatus.Running
+                            };
+                            var item = new CargoMoveItem
+                            {
+                                BatchId = batch.BatchId, CargoName = cargoName, CargoTag = cargoTag,
+                                SourceMark = station.Mark, SourcePocketKey = GetStationPocketKey(station.Mark),
+                                TargetMark = toMark, PickSequence = 1, Status = CargoTaskStatus.Executing,
+                                ExecutionSteps = steps,
+                                ExecutionTaskId = steps.Last().TaskId
+                            };
+                            foreach (var step in steps)
+                            {
+                                step.CargoBatchId = batch.BatchId;
+                                step.CargoItemId = item.ItemId;
+                            }
+                            batch.Items.Add(item);
+                            cargoMoveBatches.Add(batch);
+                            result.BatchId = batch.BatchId;
+                            result.ItemId = item.ItemId;
                             result.Success = true;
+                            SyncCargoBatchProgress();
+                        }
                         else
                             result.Error = "搬运创建失败，请检查目标货位、巷道配置、指定车辆和清障空间；详情见终端日志";
                     }
@@ -92,6 +120,49 @@ namespace ProfControl
                 Tools.trace($"[按货物搬运] 类型={cargoName}, Tag={cargoTag}, {result.FromMark} -> {toMark}, 成功={result.Success}, 原因={result.Error}");
                 return result;
             }
+        }
+
+        void TestCargoMoveCreation()
+        {
+            var destination = GetSelectableStations(false).FirstOrDefault();
+            if (destination == null)
+            {
+                Tools.trace("[单件搬运测试] 没有空货位");
+                return;
+            }
+            var result = CreateCargoMoveTask("迈巴赫", "000002", destination.StationMark);
+            Tools.trace($"[单件搬运测试] {result.CargoName}/{result.CargoTag}：{result.FromMark} -> {result.ToMark}｜批次={result.BatchId}｜明细={result.ItemId}｜成功={result.Success}｜原因={result.Error}");
+        }
+
+        bool TryGetStationCargo(string mark, out ICargo cargo, out string error)
+        {
+            cargo = null;
+            error = null;
+            var matches = API.Cargos.Where(c => API.GetOwner(c) is IStation s && s.Mark == mark).ToList();
+            if (matches.Count != 1 || matches[0].Quanlity != 1 || string.IsNullOrWhiteSpace(matches[0].Info?.Name) ||
+                string.IsNullOrWhiteSpace(Convert.ToString(matches[0].Tag)))
+            {
+                error = $"货位 {mark} 必须有唯一的一件数量为1、类型和Tag非空的货物";
+                return false;
+            }
+            var candidate = matches[0];
+            if (API.Cargos.Count(c => c.Info?.Name == candidate.Info.Name && Convert.ToString(c.Tag) == Convert.ToString(candidate.Tag)) != 1)
+            {
+                error = $"货物 {candidate.Info.Name}/{candidate.Tag} 编号重复";
+                return false;
+            }
+            cargo = candidate;
+            return true;
+        }
+
+        bool ValidateCargoOwner(TaskInfo info, ICargoAreaOwner expectedOwner)
+        {
+            if (string.IsNullOrEmpty(info.CargoName)) return true;
+            var matches = API.Cargos.Where(c => c.Info?.Name == info.CargoName && Convert.ToString(c.Tag) == info.CargoTag).ToList();
+            if (matches.Count == 1 && object.ReferenceEquals(API.GetOwner(matches[0]), expectedOwner)) return true;
+            info.Status = TaskStatus.NeedsReview;
+            WaitReason(info, $"货物 {info.CargoName}/{info.CargoTag} 转移后位置不符，需核对");
+            return false;
         }
 
         bool IsExpectedCargoAtStation(string mark, string cargoName, string cargoTag)
@@ -104,11 +175,12 @@ namespace ProfControl
 
         bool ValidateExpectedCargo(TaskInfo info)
         {
-            if (string.IsNullOrEmpty(info.ExpectedCargoName)) return true;
-            if (IsExpectedCargoAtStation(info.FromMark, info.ExpectedCargoName, info.ExpectedCargoTag))
+            if (string.IsNullOrEmpty(info.CargoName)) return true;
+            if (IsExpectedCargoAtStation(info.FromMark, info.CargoName, info.CargoTag) &&
+                API.Cargos.Count(c => c.Info?.Name == info.CargoName && Convert.ToString(c.Tag) == info.CargoTag) == 1)
                 return true;
             info.Status = TaskStatus.NeedsReview;
-            WaitReason(info, $"指定货物 {info.ExpectedCargoName}/{info.ExpectedCargoTag} 已不在取货位或取货位存在其他货物，需核对");
+            WaitReason(info, $"指定货物 {info.CargoName}/{info.CargoTag} 已不在取货位、编号重复或取货位存在其他货物，需核对");
             return false;
         }
 
@@ -157,8 +229,8 @@ namespace ProfControl
 
             var task = new TaskInfo
             {
-                ExpectedCargoName = cargoName,
-                ExpectedCargoTag = cargoTag,
+                CargoName = cargoName,
+                CargoTag = cargoTag,
                 FromMark = fromMark,
                 ToMark = toMark,
                 RequestedAgv = string.IsNullOrWhiteSpace(agvName) ? "00" : agvName,
@@ -184,7 +256,12 @@ namespace ProfControl
                     Tools.trace("[点到点搬运] 当前搬运批次尚未结束");
                     return false;
                 }
-                return CreateStationMoveTaskCore(targetMark, toMark, agvName);
+                if (!TryGetStationCargo(targetMark, out var cargo, out var error))
+                {
+                    Tools.trace($"[点到点搬运] {error}");
+                    return false;
+                }
+                return CreateCargoMoveTask(cargo.Info.Name, Convert.ToString(cargo.Tag), toMark, agvName).Success;
             }
         }
 
@@ -292,6 +369,11 @@ namespace ProfControl
 
             foreach (var blockingStation in blockingStations)
             {
+                if (!TryGetStationCargo(blockingStation.Mark, out var blockingCargo, out var cargoError))
+                {
+                    Tools.trace($"[清障规划失败] {cargoError}");
+                    return false;
+                }
                 if (!stationCargoAreas.ContainsKey(blockingStation.Mark))
                 {
                     Tools.trace($"[清障规划失败] 阻碍货位 {blockingStation.Mark} 朝向配置无效");
@@ -322,8 +404,9 @@ namespace ProfControl
                 }
                 steps.Add(new TaskInfo
                 {
-                    ExpectedCargoName = blockingStation.Mark == targetMark ? cargoName : null,
-                    ExpectedCargoTag = blockingStation.Mark == targetMark ? cargoTag : null,
+                    CargoName = blockingCargo.Info.Name,
+                    CargoTag = Convert.ToString(blockingCargo.Tag),
+                    StepType = blockingStation.Mark == targetMark ? CargoStepType.Staging : CargoStepType.Clearance,
                     FromMark = blockingStation.Mark,
                     ToMark = clearanceStation.Mark,
                     DynamicDrop = false,
@@ -334,8 +417,8 @@ namespace ProfControl
 
             steps.Add(new TaskInfo
             {
-                ExpectedCargoName = cargoName,
-                ExpectedCargoTag = cargoTag,
+                CargoName = cargoName,
+                CargoTag = cargoTag,
                 FromMark = finalFromMark,
                 ToMark = toMark,
                 RequestedAgv = agvName,
@@ -372,6 +455,8 @@ namespace ProfControl
             if (TaskInfos.Any(t => t.ClearanceBatchId == clearanceBatchId && t.Status != TaskStatus.Finished))
                 return false;
             var task = queue.Peek();
+            if (task.Status == TaskStatus.NeedsReview) return false;
+            if (!ValidateExpectedCargo(task)) return false;
             if (TaskInfos.Count(t => t.Status != TaskStatus.Finished) >= MaxParallelMoveTask) return false;
             var fromStation = API.GetStation(task.FromMark);
             var toStation = API.GetStation(task.ToMark);

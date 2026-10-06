@@ -1,4 +1,4 @@
-﻿namespace ProfControl
+namespace ProfControl
 {
     public partial class SampleProject : IAppScript
     {
@@ -84,6 +84,8 @@
             // 货物编辑要求当前没有未完成任务/批次/巷道锁，修改和删除只允许站点内唯一的一件货物；拒绝编辑 AGV 上的货物。
             // var cargoResult = CreateCargoMoveTask("迈巴赫", "000001", "目标空货位Mark"); // 类型 + Tag 自动定位起点。
             // cargoResult.Success / cargoResult.Error：任务创建结果和失败原因；选择 cargoTags 中的编号作为上述第二个参数，能否搬运由创建函数检查。
+            // cargoResult.BatchId / cargoResult.ItemId：单件搬运也返回统一批次和明细编号，通过 GetBatchDetail(cargoResult.BatchId) 查询。
+            // detail.Items：目标货物类型、Tag、目标货位/巷道和实际卸货位；每项 Steps 包含清障、暂存及目标搬运的全部步骤。
             // var result = CreatePocketMoveBatch(new[] { "01" }, new[] { "03" }); // 巷道搬运：来源、目标子分类名称；不要传站点号。
             // var multiResult = CreatePocketMoveBatch(new[] { "01", "02", "03" }, new[] { "06", "07" }); // 不定长列表；目标按顺序填充。
             // result.RequiredCount / result.TargetCapacities：待搬数量及各目标可进入空位、预留、剩余容量。
@@ -97,19 +99,12 @@
             var testCargoTags = GetCargoTags("迈巴赫");
             Tools.trace($"[货物编号查询测试] 类型=迈巴赫，编号数量={testCargoTags.Count}，编号列表=[{string.Join(", ", testCargoTags)}]");
             // TestPocketMoveBatchCreation(new[] { "06", "07", "08", "09", "10" }, new[] { "01", "02", "03" });
-            // TestCargoBatchQueries(); // 创建巷道批次后立即查询一次。
-            var testDropStation = GetSelectableStations(false).FirstOrDefault();
-            if (testDropStation == null)
-                Tools.trace("[货物搬运测试] 没有可选空货位，跳过测试");
-            else
-            {
-                var cargoResult = CreateCargoMoveTask("迈巴赫", "000001", testDropStation.StationMark);
-                Tools.trace($"[货物搬运测试] 迈巴赫/000001：{cargoResult.FromMark} -> {cargoResult.ToMark}，创建成功={cargoResult.Success}，原因={cargoResult.Error}");
-            }
+            TestCargoMoveCreation(); // 单件搬运测试；与上面的巷道搬运测试轮流注释，只启用一个。
+            TestCargoBatchQueries(); // 两种搬运共用同一批次详情查询。
             StartScheduler();
             // 查询测试：每 10 秒输出最新状态，不需要时直接注释这一行。
-            // API.SetInterval(tc => TestCargoBatchQueries(), 10000); // 巷道批次进度查询。
-            API.SetInterval(tc => TraceCargoLocations("000001"), 10000);
+            API.SetInterval(tc => TestCargoBatchQueries(), 10000); // 两种搬运共用，打印货物、目标位置及全部步骤。
+            // API.SetInterval(tc => TraceCargoLocations("000001"), 10000); // 可选的货物位置查询。
             StartHttpApi();
         }
         #endregion
@@ -163,3 +158,4 @@
  
        
   
+    

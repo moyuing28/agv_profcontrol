@@ -82,7 +82,11 @@ namespace ProfControl
         {
             public string ItemId { get; set; } = Guid.NewGuid().ToString();
             public string BatchId { get; set; }
-            public string CargoId { get; set; }
+            public string CargoName { get; set; }
+            public string CargoTag { get; set; }
+            public string TargetMark { get; set; }
+            public List<string> TargetPocketNames { get; set; } = new List<string>();
+            internal List<TaskInfo> ExecutionSteps { get; set; } = new List<TaskInfo>();
             public string SourcePocketKey { get; set; }
             public string SourceMark { get; set; }
             // 来源巷道内从外到内的顺序，从 1 开始；不是整批强制串行顺序。
@@ -144,9 +148,31 @@ namespace ProfControl
 
         public class CargoItemDetail : CargoMoveItem
         {
+            public List<CargoStepDetail> Steps { get; set; } = new List<CargoStepDetail>();
+            public int TotalStepCount => Steps.Count;
+            public int CompletedStepCount => Steps.Count(s => s.Status == TaskStatus.Finished);
             public string StatusText { get; set; }
             // 未生成执行任务时为空，不能把等待明细显示成已经开始执行。
             public string ExecutionStatusText { get; set; }
+        }
+
+        public enum CargoStepType { Clearance, Staging, TargetMove }
+
+        public class CargoStepDetail
+        {
+            public string TaskId { get; set; }
+            public int Sequence { get; set; }
+            public CargoStepType StepType { get; set; }
+            public string CargoName { get; set; }
+            public string CargoTag { get; set; }
+            public string FromMark { get; set; }
+            public string ToMark { get; set; }
+            public string DropPocketKey { get; set; }
+            public string AgvName { get; set; }
+            public bool Activated { get; set; }
+            public TaskStatus Status { get; set; }
+            public string StatusText { get; set; }
+            public string WaitReason { get; set; }
         }
 
         public class CargoEditResult
@@ -160,6 +186,8 @@ namespace ProfControl
 
         public class CargoMoveCreateResult
         {
+            public string BatchId { get; set; }
+            public string ItemId { get; set; }
             public bool Success { get; set; }
             public string Error { get; set; }
             public string CargoName { get; set; }
@@ -172,8 +200,9 @@ namespace ProfControl
         {
             public string TaskId { get; set; } = Guid.NewGuid().ToString();
             // 按货物创建的任务使用类型 + Tag 核验取货身份。
-            public string ExpectedCargoName { get; set; }
-            public string ExpectedCargoTag { get; set; }
+            public string CargoName { get; set; }
+            public string CargoTag { get; set; }
+            public CargoStepType StepType { get; set; } = CargoStepType.TargetMove;
             // 业务批次关联，与下方已有的清障步骤队列编号分开。
             public string CargoBatchId { get; set; }
             public string CargoItemId { get; set; }

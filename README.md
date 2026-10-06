@@ -56,19 +56,81 @@
 
 ## 三层任务与两类批次编号
 
-1. `CargoMoveBatch`：客户的一次巷道搬运要求，记录创建时的源货物清单。
-2. `CargoMoveItem`：每个源有货站点一条业务明细，等待时不创建执行任务，也不固定卸货位。
-3. `TaskInfo`：已落实资源和车辆的执行任务。
+1. `CargoMoveBatch`：客户的一次单件或巷道搬运要求，统一通过批次编号查询。
+2. `CargoMoveItem`：每件目标货物一条业务明细，保存 `CargoName`、`CargoTag`、起点和目标要求。单件搬运保存 `TargetMark`；巷道搬运保存 `TargetPocketNames`，具体卸货位动态分配。
+3. `TaskInfo` / 查询中的 `CargoStepDetail`：明细下的执行步骤，保存本步骤实际搬运货物的类型、编号、起终点、车辆、状态及等待原因。`StepType` 区分 `Clearance` 清障、`Staging` 暂存和 `TargetMove` 目标搬运。
 
-业务关联用 `CargoBatchId`、`CargoItemId`、`TaskId`。清障步骤组用 `ClearanceBatchId`、`ClearanceSequence` 和 `PendingClearanceBatches`，不要混为一套批次。
+业务关联用 `CargoBatchId`、`CargoItemId`、`TaskId`。清障步骤组仍用 `ClearanceBatchId`、`ClearanceSequence` 和 `PendingClearanceBatches` 控制串行执行，但这些步骤全部关联同一业务明细并向客户返回。障碍货物不增加目标货物清单数量，而是在该明细的 `Steps` 中展示。
 
 点到点清障搬运同时检查取货端和卸货端到入口之间的阻挡货物，先清卸货端、再清取货端，最后搬目标货物，**不包含自动搬回原位**。同巷道阻碍去重后统一从外到内清理，目标货物自身不作为卸货端阻碍；若目标货物挡住更深处阻碍的取货路径，则先将目标货物暂存到其他巷道，最后从暂存位搬到指定卸货位，规划时计入额外暂存容量。卸货位本身必须为空。
 
 清障存放位排除取卸货巷道，只使用其他有效、未锁定巷道中从入口连续可达的空位；规划时模拟逐次占用，固定每一步存放位置。可达容量不足则整组拒绝，不先搬一部分。步骤串行执行，前一步结束（含退出巷道和停车）后才激活下一步，执行时仍复查站点、容量和巷道锁。同巷道最终搬运的容量预留按目标货物取走后的状态计算。
 
+### 编号含义
+
+“批次”就是一次客户搬运请求，不要求必须搬多件货。单件点到点也创建一个批次，里面只有一条目标货物明细。
+
+| 字段 | 含义 | 编号方式 |
+| --- | --- | --- |
+| `BatchId` | 这一次搬运请求；查询整次请求的进度和详情 | 自动生成 GUID |
+| `ItemId` | 请求中某件目标货物的搬运明细 | 自动生成 GUID |
+| `Steps[].TaskId` | 具体一次清障、暂存或最终搬运步骤 | 自动生成 GUID |
+| `Steps[].Sequence` | 明细内步骤的执行顺序 | 从 1 开始的顺序号 |
+| `PickSequence` | 来源巷道内从外到内的取货顺序 | 不是步骤编号，也不是整批强制执行顺序 |
+| `CargoTag` | 货物本身的编号，与 `CargoName` 一起识别货物 | 调用方填写的字符串，例如 `000001` |
+
+GUID 形如 `a3f19c42-6b87-4d20-9e51-8c02f347ab69`，不是乱码，也不是连续编号；不要按 GUID 判断先后顺序。客户不需要填写任务 GUID，创建成功后保存 `BatchId` 即可查询，再按 `ItemId`、`TaskId` 区分明细和步骤。重复查询同一个已创建任务时，这些编号保持不变；重新创建请求会产生新编号。
+
+### 点到点带障碍：调用与返回示例
+
+假设客户要求将迈巴赫 `000001` 从站点 71 搬到空站点 85，取货路径上有两件障碍货，需要先搬到其他巷道的空货位。以下站点、障碍和清障位置仅为结构示例，是否可搬以及实际清障位置取决于地图和可达空位。
+
+```text
+一次搬运请求（BatchId）
+└─ 一条目标货物明细（ItemId）：迈巴赫 000001，71 → 85
+   ├─ 第1步（独立 TaskId）：迈巴赫 000002，72 → 90，Clearance 清障
+   ├─ 第2步（独立 TaskId）：迈巴赫 000003，73 → 91，Clearance 清障
+   └─ 第3步（独立 TaskId）：迈巴赫 000001，71 → 85，TargetMove 最终搬运
+```
+
+创建函数返回 `CargoMoveCreateResult`，字段为 `Success`、`Error`、`BatchId`、`ItemId`、`CargoName`、`CargoTag`、`FromMark`、`ToMark`。**创建结果不直接包含 `TaskId` 或步骤列表**；成功只表示创建成功，不表示搬运完成。失败时读取 `Error`，不要继续用失败结果查询详情。
+
+```csharp
+var result = CreateCargoMoveTask("迈巴赫", "000001", "85");
+if (!result.Success)
+{
+    Tools.trace($"创建失败：{result.Error}");
+}
+else
+{
+    // 保存 result.BatchId，后续重复查询这个编号取得最新进度。
+    var detail = GetBatchDetail(result.BatchId);
+    var item = detail?.Items.FirstOrDefault(i => i.ItemId == result.ItemId);
+    if (item != null)
+    {
+        Tools.trace($"目标货物={item.CargoName}/{item.CargoTag}，" +
+            $"目标站点={item.TargetMark}，状态={item.StatusText}，" +
+            $"步骤完成={item.CompletedStepCount}/{item.TotalStepCount}");
+        foreach (var step in item.Steps)
+            Tools.trace($"第{step.Sequence}步，TaskId={step.TaskId}，" +
+                $"类型={step.StepType}，货物={step.CargoName}/{step.CargoTag}，" +
+                $"{step.FromMark} → {step.ToMark}，AGV={step.AgvName}，" +
+                $"状态={step.StatusText}，等待原因={step.WaitReason}");
+    }
+}
+```
+
+每一步的 `TaskId` 都在 `GetBatchDetail(...).Items[].Steps[]` 中返回，不只是反馈整体进度。要跟踪某一步，重新查询该 `BatchId` 后，在对应明细的 `Steps` 中查找同一个 `TaskId`；目前没有独立的按 `TaskId` 查询步骤的公开函数。
+
+明细的 `ExecutionTaskId` 关联最终目标搬运步骤，不是“当前正在执行步骤”的编号；逐步跟踪应使用 `Steps`。`Activated` 表示步骤已加入执行任务池，不等于正在执行或已经完成；结合 `Status` / `StatusText` 判断，尚未激活的步骤显示“等待前序步骤”，`AgvName` 可为空。
+
+这个例子中，清障完成两步时，`CompletedStepCount/TotalStepCount` 为 `2/3`，但目标货物尚未完成，所以批次的 `CompletedCount/TotalCount` 仍为 `0/1`。全部步骤完成（含车辆停车）后才变为 `3/3` 和 `1/1`。如果需要先暂存目标货物，还会返回 `Staging` 步骤。障碍货不会自动搬回原位。
+
+这些函数返回 C# 对象，不会自动变成 HTTP JSON 接口。查询返回独立快照，需要再次调用获取最新状态。`SourceMark`、`TargetMark` 和每步 `FromMark/ToMark` 是搬运起终点，不表示货物实时位置；实时位置查询使用现有货物位置查询逻辑。
+
 ## 业务批次创建与派发
 
-统一使用 `CreatePocketMoveBatch(IEnumerable<string> sourcePocketNames, IEnumerable<string> targetPocketNames)`，两个参数均传数组或列表，不提供双字符串重载；返回 `CargoBatchCreateResult`，检查 `Success`、`Error` 和成功后的 `Batch.BatchId`。
+巷道搬运使用 `CreatePocketMoveBatch(IEnumerable<string> sourcePocketNames, IEnumerable<string> targetPocketNames)`，两个参数均传数组或列表，不提供双字符串重载；返回 `CargoBatchCreateResult`，检查 `Success`、`Error` 和成功后的 `Batch.BatchId`。单件搬运使用 `CreateCargoMoveTask`，返回 `BatchId`、`ItemId`。两种入口共用下面的明细与进度查询。
 
 - 创建时校验巷道配置，按物理巷道去重并保留顺序；来源目标不能重叠。跳过空来源，全部无货则拒绝。
 - 支持 `CreatePocketMoveBatch(new[] { "01", "02", "03" }, new[] { "06", "07" })`，两个集合长度不限；单巷道也统一传单元素数组或列表。
@@ -80,8 +142,8 @@
 - 来源按巷道轮询，某来源被占用不阻塞其他来源；每条内部从外向内取货，仍受并行上限约束。
 - 批次查询返回独立的来源、目标名称列表和查询时的目标容量快照。ScopeId 为名称逗号拼接，仅供展示；单值 TargetPocketKey 只在单目标时赋值，多目标调度使用 TargetPocketKeys。
 - 当前只允许一个未完成业务批次；已有其他未完成执行任务或清障队列时拒绝创建。
-- 创建按当时有货的来源站点建立搬运清单，不保存货物对象引用，也不比较货物身份，不马上派车；后来其他站点新增的货物不会自动加入原批次。
-- 调度按源巷道外侧到内侧挑选等待明细，检查来源站点存在且有货、外侧货物是否搬离、源锁、并行名额、目标容量和可用车辆。批量任务进入取货巷道前及取货等待结束后仍检查来源站点有货，不做对象身份检查。
+- 巷道批次创建时记录当时来源货物的类型与编号，要求每个来源站点只有一件数量为 1 的货物，且类型与编号非空、组合全局唯一；不马上派车，后来新增货物不会自动加入原批次。
+- 调度按源巷道外侧到内侧挑选等待明细，核验原货物仍在计划站点，并检查外侧阻挡、源锁、并行名额、目标容量和可用车辆。进入取货巷道前、真正取货前再次核验类型与编号，取货后及卸货前后核验货物拥有者；异常进入 `NeedsReview`，不改搬其他货物。
 - 资源成立才关联 TaskInfo、占用取货巷道并派车；目标巷道此时可以被前车占用。
 - 创建、调度和业务查询使用 `cargoBatchSync` 协调共享状态。
 - 来源站点不存在或已无货、执行关联丢失或派车结果不确定时进入 `NeedsReview`，不擅自释放已占资源或重复派发。
@@ -141,15 +203,15 @@ None / 业务调度派车
 - `GetCargoTags(cargoName)`：按 `CargoInfo.Name` 精确筛选当前实体货物，返回非空、去重并按字符串顺序排序的 `List<string>` Tag 列表，可直接用于编号下拉框。示例：`var tags = GetCargoTags("迈巴赫");`，返回类似 `["000001", "000002"]`；参数为空或无匹配时返回空列表。包含站点及 AGV 上的货物，列表不代表当前可搬运，也不能用去重后的列表检测重复编号；创建搬运时仍核验类型与 Tag 的唯一性。
 - `CreateCargoMoveTask(cargoName, cargoTag, toMark, agvName = "00")`：按 `CargoInfo.Name` 与实体 `Cargo.Tag` 精确定位货物，自动取得源站点，再复用点到点搬运及两端清障。示例：`var result = CreateCargoMoveTask("迈巴赫", "000001", "41");`；检查 `result.Success`、`result.Error`，返回值还包含类型、Tag、实际起点和目标站点。成功表示任务已创建，不代表搬运完成。
 - 不同类型可使用相同 Tag，同一类型与 Tag 必须唯一。新入口要求源站点仅有一件数量为 1 的指定货物；无匹配、重复匹配、货物不在站点、已有未完成任务时拒绝创建。目标必须满足现有点到点货位、巷道及清障要求；`"00"` 自动选车，其他值指定 AGV 名称。
-- 按货物创建的普通任务、目标货物暂存步骤和最终搬运步骤记录 `ExpectedCargoName/ExpectedCargoTag`，到取货入口及真正取货前再次核验。货物已被替换或源站点出现其他货物时进入 `NeedsReview` 并保留资源等待核对。原 `CreateStationMoveTask()` 保留原有站点调用方式。
+- 所有搬运步骤（含障碍货物）记录 `CargoName/CargoTag` 并核验身份；障碍货物同样必须满足单件、非空且唯一的身份要求。货物被替换或位置不符时进入 `NeedsReview` 并保留资源等待核对。原 `CreateStationMoveTask()` 保留站点参数，但内部按该站点货物调用新入口，也创建统一业务批次。
 - `GetBatches()`：业务批次进度独立快照，最新在前。
-- `GetBatchDetail(batchId)`：全部业务明细及执行阶段快照，不存在返回 null。查询不会派车或推进状态。
-- 业务完成数以执行任务 `Finished` 为准，**包含回家停车**，不是仅卸货完成。
+- `GetBatchDetail(batchId)`：返回独立快照，不存在返回 null。`Items` 包含货物类型、编号、来源、请求目标站点/巷道、实际卸货位 `AssignedDropMark`、状态及等待原因；`Steps` 包含所有已规划步骤（包括尚未激活的清障步骤），并提供 `TotalStepCount`、`CompletedStepCount`。巷道明细等待派车时步骤列表为空，派车后加入搬运步骤，具体卸货位确定前可为空。查询不会派车或推进状态。
+- 一条货物明细下所有步骤均达到 `Finished` 才计为完成，**包含回家停车**，不是仅卸货完成；清障步骤完成不代表目标货物已完成。
 - `HttpApi.cs` 当前仅映射 `/api/agvs`、`/api/tasks`，监听 `http://localhost:8088`。业务批次查询函数尚未映射为 HTTP 路由。
 - 当前初始化在 `LoadMapConfiguration()` 后，通过 `GetMapCategory(GarageArea)?.Children` 读取已缓存的“车库位”分类站点，调用 `ClearCargo()` 清空这些站点的全部货物区域，再逐行调用 `AddCargo("迈巴赫", 编号, 站点Mark)` 生成货物并打印全部货物位置，随后按 `parkingstaID` 摆车。无需手填清货站点列表，也不重新扫描地图；清货不删除站点本身。
 - “车库位”分类不存在时输出日志并跳过清货；没有货物区域的站点由 `ClearCargo()` 过滤。清货范围由“车库位”分类决定，不是地图中的所有站点。不能把重启脚本当作无副作用的恢复操作。
-- `script.cs` 当前初始化先调用 `GetCargoTags("迈巴赫")`，以 `[货物编号查询测试]` 打印实际返回的编号数量和完整列表；无匹配时显示数量 `0` 和列表 `[]`。然后自动选择 `GetSelectableStations(false)` 返回的第一个空货位，调用 `CreateCargoMoveTask("迈巴赫", "000001", 目标Mark)`，打印创建结果并启动调度；每 10 秒通过 `TraceCargoLocations("000001")` 打印当前位置。没有空货位时跳过搬运测试，创建失败时打印原因。
-- 初始化中的开发者注释区保留了 `GetCargoTags("迈巴赫")`、`GetCargoTags("梅赛德斯")` 和按类型、编号搬运的调用示例及返回值说明。原巷道批次创建、立即查询 `TestCargoBatchQueries()` 和每 10 秒批次查询均保留为注释，切换测试时取消相应注释并停用当前搬运测试，避免两个创建入口互相拒绝。
+- `script.cs` 初始化仍打印迈巴赫编号列表；搬运测试保留相邻两行 `TestPocketMoveBatchCreation(...)` 和 `TestCargoMoveCreation()`，轮流注释，只启用其中一行。当前启用单件测试，自动将迈巴赫 `000002` 搬到第一个可选空货位；没有空货位或创建失败时打印原因。更换单件测试货物时，在 `TestCargoMoveCreation()` 中修改类型和编号。
+- 两种测试共用立即调用及每 10 秒调用的 `TestCargoBatchQueries()`，打印批次进度、每件目标货物身份与目标位置，以及清障、暂存、最终搬运的逐步明细。开发者注释区已补充创建结果的批次/明细编号和详情字段；原位置打印定时器保留为注释。
 - 旧 `GenerateCargo()` 已移除，初始化改用 `AddCargo("迈巴赫", Tag, 站点Mark)`，根据站点朝向选择货物区并直接放置一件货物。宿主工程必须预先存在名称为“迈巴赫”的 `CargoInfo`；不随机生成货物或容器信息，也不创建托盘。
 - 初始化编号固定为 `000001` 至 `000012`，依次对应站点 `71、72、67、68、58、59、54、55、44、45、40、41`。初始化使用 12 行直接调用，不检查每行返回结果；需要查看失败原因时可接收 `CargoEditResult`。重新加载仍会清货并按该配置重新生成。
 - `TraceCargoLocations(cargoTag)` 使用 `API.Cargos` 枚举货物，通过 `API.GetOwner(cargo)` 判断顶层拥有者，并以 `[货物位置]` 日志输出货物 Tag、类型以及所在站点或 AGV。参数为空时输出全部货物，传入例如 `"000001"` 时只查询该货物；初始化添加完成后自动调用一次无参查询。
@@ -157,8 +219,8 @@ None / 业务调度派车
 
 ## 已知边界与后续工作
 
-- `CargoMoveType.AreaToArea`、`PointToPoint` 枚举不代表已有统一业务批次创建接口；当前巷道批次入口支持单巷道和多巷道列表。点到点清障另走 TaskCreator。
-- 业务前提是只有本系统控制的 AGV 搬货。测试货物当前具有运行期六位 `Cargo.Tag`，可用于查询宿主货物对象的位置；巷道业务批次中的 `CargoId` 仍未赋值，巷道批次调度不按 Tag 核验货物身份，也不保存货物对象快照或比较对象引用。新 `CreateCargoMoveTask()` 创建的目标货物步骤会核验类型和 Tag。批次查询返回独立的数据快照。
+- 单件搬运和巷道搬运使用不同创建参数，但统一为业务批次、货物明细、执行步骤和查询接口；两者保留原有清障和动态卸货的执行策略，不强行采用同一种调度策略。
+- 业务前提是只有本系统控制的 AGV 搬货。两种搬运均按类型与 `Cargo.Tag` 核验身份；人工移动后不会自动重新寻址或重规划，而是暂停相关明细等待核对。批次查询返回独立数据快照，不暴露内部执行对象。
 - `Cargo.Tag` 是宿主货物对象的附加信息，本项目尚未对编号和位置做持久化；脚本重载会清货并重新编号，不能将该 Tag 当作跨重启不变的正式资产编号。
 - 业务批次、执行任务、预留和停车占用都在内存；没有持久化重启恢复。后续恢复应结合任务阶段、AGV 载货和货位状态核对。
 - 尚未提供完整的暂停、取消、NeedsReview 人工处理及恢复接口。
@@ -173,6 +235,8 @@ README 是文档，不加入 csproj 的 `Compile` 项；`project.config` 的 `Co
 该项目依赖宿主 DLL 和 Windows/.NET 环境。可通过软件重新加载脚本编译；也可使用本机 Roslyn C# 编译器，引用宿主 DLL、.NET 6、ASP.NET Core 和 WindowsDesktop 程序集，对本目录全部 `.cs` 做库编译检查。单纯编译不会验证现场地图或车辆动作，也不要以运行 `Main()` 的方式做无副作用测试。
 
 初始化复用地图缓存清空全部车库位货物、随后生成指定测试货物的调整已通过编译，用户已反馈效果可用；该反馈仅覆盖此次初始化清货调整。
+
+本次单件/巷道搬运统一批次、货物明细和步骤查询，以及货物身份核验的改动已通过全部 C# 脚本编译检查。现场还需轮流验证：带障碍的点到点是否完整返回并串行执行清障/暂存/最终搬运步骤，巷道搬运是否正确返回货物身份和动态目标，以及步骤完成数与目标货物完成数是否一致。编译通过不代表现场动作已经验证。
 
 多巷道搬运还需现场验证：不同容量目标的顺序分配、在途预留占满后转向下一目标、某来源被占用时其他来源继续派发，以及总容量不足时整批拒绝。隔离验证不能替代现场地图和车辆联调。
 
