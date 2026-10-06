@@ -20,7 +20,7 @@
 | `TaskExecutor.cs` | 搬运状态机、库位朝向区域解析、车辆分配、容量预留、卸货准入和货物巷道锁 |
 | `ParkingDispatch.cs` | 动态停车位选择、停车巷道进出互斥及可出库车辆筛选 |
 | `AgvParking.cs` | 按 parkingstaID 初始化车辆位置、登记占用并加载停车巷道 |
-| `CargoInitializer.cs` | 初始化测试货物、清理传入站点的货物区域；初始化时接收全部车库位站点 |
+| `CargoInitializer.cs` | 清理并初始化测试货物，为实体货物写入六位 Tag，并通过宿主货物 API 查询、输出当前位置 |
 | `StationOptions.cs` | 查询有货站点及可选卸货站点；查询结果不等于可立即派车 |
 | `HttpApi.cs` | `/api/agvs`、`/api/tasks` 查询接口 |
 | `globalusing.cs` | 系统及宿主 API 的全局 using |
@@ -139,13 +139,16 @@ None / 业务调度派车
 - 当前初始化在 `LoadMapConfiguration()` 后，通过 `GetMapCategory(GarageArea)?.Children` 读取已缓存的“车库位”分类站点，调用 `ClearCargo()` 清空这些站点的全部货物区域，再通过 `GenerateCargo(targetStations)` 在指定站点生成测试货物，并按 `parkingstaID` 摆车。无需手填清货站点列表，也不重新扫描地图；清货不删除站点本身。
 - “车库位”分类不存在时输出日志并跳过清货；没有货物区域的站点由 `ClearCargo()` 过滤。清货范围由“车库位”分类决定，不是地图中的所有站点。不能把重启脚本当作无副作用的恢复操作。
 - `script.cs` 当前运行 `TestPocketMoveBatchCreation(new[] { "06", "07", "08", "09", "10" }, new[] { "01", "02", "03" })`，随后查询；还每 10 秒调用 `TestCargoBatchQueries()` 输出进度。切换测试时直接调整调用，保留代码中的 API 使用示例注释。
-- `CargoInitializer.cs` 的 `GenerateCargo()` 选择站点的 `CargoAreas.First()` 放置托盘和货物，不按朝向分类选择区域。
+- `CargoInitializer.cs` 的 `GenerateCargo()` 选择站点的 `CargoAreas.First()`，直接调用 `CargoPlace("迈巴赫", 1)` 放置货物，不再创建托盘。宿主工程必须预先存在名称为“迈巴赫”的 `CargoInfo`；初始化代码不再随机生成货物或容器信息。
+- 每件成功生成的测试货物通过实体 `Cargo.Tag` 写入从 `000001` 开始递增的六位编号。编号只在本次初始化期间有效，每次重新执行 `GenerateCargo()` 都从 `000001` 开始，顺序取决于传入站点列表。
+- `TraceCargoLocations(cargoTag)` 使用 `API.Cargos` 枚举货物，通过 `API.GetOwner(cargo)` 判断顶层拥有者，并以 `[货物位置]` 日志输出货物 Tag、类型以及所在站点或 AGV。参数为空时输出全部货物，传入例如 `"000001"` 时只查询该货物；`GenerateCargo()` 完成后自动调用一次无参查询。
 - 并行执行上限当前为 4，调度周期 1000 ms。
 
 ## 已知边界与后续工作
 
 - `CargoMoveType.AreaToArea`、`PointToPoint` 枚举不代表已有统一业务批次创建接口；当前巷道批次入口支持单巷道和多巷道列表。点到点清障另走 TaskCreator。
-- 业务前提是只有本系统控制的 AGV 搬货。目前不要求货物唯一编号，不保存货物对象快照或比较对象引用；`CargoId` 字段预留但未赋值，不参与调度判断。查询返回独立的数据快照。
+- 业务前提是只有本系统控制的 AGV 搬货。测试货物当前具有运行期六位 `Cargo.Tag`，可用于查询宿主货物对象的位置；业务批次中的 `CargoId` 仍未赋值，调度不按 Tag 核验货物身份，也不保存货物对象快照或比较对象引用。批次查询返回独立的数据快照。
+- `Cargo.Tag` 是宿主货物对象的附加信息，本项目尚未对编号和位置做持久化；脚本重载会清货并重新编号，不能将该 Tag 当作跨重启不变的正式资产编号。
 - 业务批次、执行任务、预留和停车占用都在内存；没有持久化重启恢复。后续恢复应结合任务阶段、AGV 载货和货位状态核对。
 - 尚未提供完整的暂停、取消、NeedsReview 人工处理及恢复接口。
 - 尚未实现多业务批次并行、双向搬运循环等待检测和完整公平调度。

@@ -5,9 +5,6 @@ namespace ProfControl
 
         void GenerateCargo(List<IStation> targetStations)
         {
-            API.RandomGenerateCargoInfo(4);
-            API.RandomGenerateContainerInfo(1, true, false, false);
-
             var validStations = targetStations
                 .Where(s => s.CargoAreas != null && s.CargoAreas.Count > 0)
                 .ToList();
@@ -16,18 +13,47 @@ namespace ProfControl
 
             API.ClearCargos(validStations.SelectMany(s => s.CargoAreas).Distinct().ToList());
 
+            var cargoNumber = 1;
             foreach (var sta in validStations)
             {
                 if (!sta.IsEmpty()) continue;
 
                 var area = sta.CargoAreas.First();
-                var container = area.ContainerPlace("托盘_0");
-                if (container != null)
-                {
-                    container.CargoPlace("货物_1", 1);
-                }
+                var cargo = area.CargoPlace("迈巴赫", 1);
+                if (cargo == null) continue;
+
+                cargo.Tag = cargoNumber.ToString("D6");
+                cargoNumber++;
             }
             Tools.trace($"GenerateCargo");
+            TraceCargoLocations();
+        }
+
+        // cargoTag 为空时打印全部货物；传入编号时只查询指定货物。
+        void TraceCargoLocations(string cargoTag = null)
+        {
+            var found = 0;
+            foreach (var cargo in API.Cargos)
+            {
+                var tag = Convert.ToString(cargo.Tag);
+                if (!string.IsNullOrEmpty(cargoTag) && tag != cargoTag) continue;
+
+                found++;
+                var cargoName = cargo.Info?.Name ?? "未知类型";
+                var owner = API.GetOwner(cargo);
+
+                if (owner is IStation station)
+                    Tools.trace($"[货物位置] Tag={tag}，类型={cargoName}，位置=站点 {station.Mark}");
+                else if (owner is IAgv agv)
+                    Tools.trace($"[货物位置] Tag={tag}，类型={cargoName}，位置=AGV {agv.Name}");
+                else
+                    Tools.trace($"[货物位置] Tag={tag}，类型={cargoName}，位置=未知");
+            }
+
+            if (found == 0)
+                Tools.trace(string.IsNullOrEmpty(cargoTag)
+                    ? "[货物查询] 当前没有货物"
+                    : $"[货物查询] 未找到 Tag={cargoTag} 的货物");
         }
 
         void ClearCargo(List<IStation> dropStations)
