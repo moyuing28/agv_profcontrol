@@ -132,13 +132,18 @@ None / 业务调度派车
 
 ## 查询和当前测试入口
 
+- `GetCargoTags(cargoName)`：按 `CargoInfo.Name` 精确筛选当前实体货物，返回非空、去重并按字符串顺序排序的 `List<string>` Tag 列表，可直接用于编号下拉框。示例：`var tags = GetCargoTags("迈巴赫");`，返回类似 `["000001", "000002"]`；参数为空或无匹配时返回空列表。包含站点及 AGV 上的货物，列表不代表当前可搬运，也不能用去重后的列表检测重复编号；创建搬运时仍核验类型与 Tag 的唯一性。
+- `CreateCargoMoveTask(cargoName, cargoTag, toMark, agvName = "00")`：按 `CargoInfo.Name` 与实体 `Cargo.Tag` 精确定位货物，自动取得源站点，再复用点到点搬运及两端清障。示例：`var result = CreateCargoMoveTask("迈巴赫", "000001", "41");`；检查 `result.Success`、`result.Error`，返回值还包含类型、Tag、实际起点和目标站点。成功表示任务已创建，不代表搬运完成。
+- 不同类型可使用相同 Tag，同一类型与 Tag 必须唯一。新入口要求源站点仅有一件数量为 1 的指定货物；无匹配、重复匹配、货物不在站点、已有未完成任务时拒绝创建。目标必须满足现有点到点货位、巷道及清障要求；`"00"` 自动选车，其他值指定 AGV 名称。
+- 按货物创建的普通任务、目标货物暂存步骤和最终搬运步骤记录 `ExpectedCargoName/ExpectedCargoTag`，到取货入口及真正取货前再次核验。货物已被替换或源站点出现其他货物时进入 `NeedsReview` 并保留资源等待核对。原 `CreateStationMoveTask()` 保留原有站点调用方式。
 - `GetBatches()`：业务批次进度独立快照，最新在前。
 - `GetBatchDetail(batchId)`：全部业务明细及执行阶段快照，不存在返回 null。查询不会派车或推进状态。
 - 业务完成数以执行任务 `Finished` 为准，**包含回家停车**，不是仅卸货完成。
 - `HttpApi.cs` 当前仅映射 `/api/agvs`、`/api/tasks`，监听 `http://localhost:8088`。业务批次查询函数尚未映射为 HTTP 路由。
 - 当前初始化在 `LoadMapConfiguration()` 后，通过 `GetMapCategory(GarageArea)?.Children` 读取已缓存的“车库位”分类站点，调用 `ClearCargo()` 清空这些站点的全部货物区域，再通过 `GenerateCargo(targetStations)` 在指定站点生成测试货物，并按 `parkingstaID` 摆车。无需手填清货站点列表，也不重新扫描地图；清货不删除站点本身。
 - “车库位”分类不存在时输出日志并跳过清货；没有货物区域的站点由 `ClearCargo()` 过滤。清货范围由“车库位”分类决定，不是地图中的所有站点。不能把重启脚本当作无副作用的恢复操作。
-- `script.cs` 当前运行 `TestPocketMoveBatchCreation(new[] { "06", "07", "08", "09", "10" }, new[] { "01", "02", "03" })`，随后查询；还每 10 秒调用 `TestCargoBatchQueries()` 输出进度。切换测试时直接调整调用，保留代码中的 API 使用示例注释。
+- `script.cs` 当前初始化先调用 `GetCargoTags("迈巴赫")`，以 `[货物编号查询测试]` 打印实际返回的编号数量和完整列表；无匹配时显示数量 `0` 和列表 `[]`。然后自动选择 `GetSelectableStations(false)` 返回的第一个空货位，调用 `CreateCargoMoveTask("迈巴赫", "000001", 目标Mark)`，打印创建结果并启动调度；每 10 秒通过 `TraceCargoLocations("000001")` 打印当前位置。没有空货位时跳过搬运测试，创建失败时打印原因。
+- 初始化中的开发者注释区保留了 `GetCargoTags("迈巴赫")`、`GetCargoTags("梅赛德斯")` 和按类型、编号搬运的调用示例及返回值说明。原巷道批次创建、立即查询 `TestCargoBatchQueries()` 和每 10 秒批次查询均保留为注释，切换测试时取消相应注释并停用当前搬运测试，避免两个创建入口互相拒绝。
 - `CargoInitializer.cs` 的 `GenerateCargo()` 选择站点的 `CargoAreas.First()`，直接调用 `CargoPlace("迈巴赫", 1)` 放置货物，不再创建托盘。宿主工程必须预先存在名称为“迈巴赫”的 `CargoInfo`；初始化代码不再随机生成货物或容器信息。
 - 每件成功生成的测试货物通过实体 `Cargo.Tag` 写入从 `000001` 开始递增的六位编号。编号只在本次初始化期间有效，每次重新执行 `GenerateCargo()` 都从 `000001` 开始，顺序取决于传入站点列表。
 - `TraceCargoLocations(cargoTag)` 使用 `API.Cargos` 枚举货物，通过 `API.GetOwner(cargo)` 判断顶层拥有者，并以 `[货物位置]` 日志输出货物 Tag、类型以及所在站点或 AGV。参数为空时输出全部货物，传入例如 `"000001"` 时只查询该货物；`GenerateCargo()` 完成后自动调用一次无参查询。
@@ -147,7 +152,7 @@ None / 业务调度派车
 ## 已知边界与后续工作
 
 - `CargoMoveType.AreaToArea`、`PointToPoint` 枚举不代表已有统一业务批次创建接口；当前巷道批次入口支持单巷道和多巷道列表。点到点清障另走 TaskCreator。
-- 业务前提是只有本系统控制的 AGV 搬货。测试货物当前具有运行期六位 `Cargo.Tag`，可用于查询宿主货物对象的位置；业务批次中的 `CargoId` 仍未赋值，调度不按 Tag 核验货物身份，也不保存货物对象快照或比较对象引用。批次查询返回独立的数据快照。
+- 业务前提是只有本系统控制的 AGV 搬货。测试货物当前具有运行期六位 `Cargo.Tag`，可用于查询宿主货物对象的位置；巷道业务批次中的 `CargoId` 仍未赋值，巷道批次调度不按 Tag 核验货物身份，也不保存货物对象快照或比较对象引用。新 `CreateCargoMoveTask()` 创建的目标货物步骤会核验类型和 Tag。批次查询返回独立的数据快照。
 - `Cargo.Tag` 是宿主货物对象的附加信息，本项目尚未对编号和位置做持久化；脚本重载会清货并重新编号，不能将该 Tag 当作跨重启不变的正式资产编号。
 - 业务批次、执行任务、预留和停车占用都在内存；没有持久化重启恢复。后续恢复应结合任务阶段、AGV 载货和货位状态核对。
 - 尚未提供完整的暂停、取消、NeedsReview 人工处理及恢复接口。

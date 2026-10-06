@@ -29,6 +29,23 @@ namespace ProfControl
             TraceCargoLocations();
         }
 
+        // 返回指定货物类型当前存在的非空 Tag，用于编号下拉列表。
+        public List<string> GetCargoTags(string cargoName)
+        {
+            lock (cargoBatchSync)
+            {
+                if (string.IsNullOrWhiteSpace(cargoName)) return new List<string>();
+
+                return API.Cargos
+                    .Where(c => c.Info?.Name == cargoName)
+                    .Select(c => Convert.ToString(c.Tag))
+                    .Where(tag => !string.IsNullOrWhiteSpace(tag))
+                    .Distinct(StringComparer.Ordinal)
+                    .OrderBy(tag => tag, StringComparer.Ordinal)
+                    .ToList();
+            }
+        }
+
         // cargoTag 为空时打印全部货物；传入编号时只查询指定货物。
         void TraceCargoLocations(string cargoTag = null)
         {

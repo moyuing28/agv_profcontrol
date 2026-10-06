@@ -149,9 +149,22 @@ namespace ProfControl
             public string ExecutionStatusText { get; set; }
         }
 
+        public class CargoMoveCreateResult
+        {
+            public bool Success { get; set; }
+            public string Error { get; set; }
+            public string CargoName { get; set; }
+            public string CargoTag { get; set; }
+            public string FromMark { get; set; }
+            public string ToMark { get; set; }
+        }
+
         public class TaskInfo
         {
             public string TaskId { get; set; } = Guid.NewGuid().ToString();
+            // 按货物创建的任务使用类型 + Tag 核验取货身份。
+            public string ExpectedCargoName { get; set; }
+            public string ExpectedCargoTag { get; set; }
             // 业务批次关联，与下方已有的清障步骤队列编号分开。
             public string CargoBatchId { get; set; }
             public string CargoItemId { get; set; }

@@ -55,7 +55,65 @@ namespace ProfControl
             return true;
         }
 
-        bool CreateSimpleStationMoveTask(string fromMark, string toMark, string agvName = "00")
+        public CargoMoveCreateResult CreateCargoMoveTask(string cargoName, string cargoTag,
+            string toMark, string agvName = "00")
+        {
+            lock (cargoBatchSync)
+            {
+                var result = new CargoMoveCreateResult
+                {
+                    CargoName = cargoName, CargoTag = cargoTag, ToMark = toMark
+                };
+                if (string.IsNullOrWhiteSpace(cargoName) || string.IsNullOrWhiteSpace(cargoTag) ||
+                    string.IsNullOrWhiteSpace(toMark))
+                    result.Error = "货物类型、Tag 和目标站点不能为空";
+                else if (HasOpenCargoBatch() || TaskInfos.Any(t => t.Status != TaskStatus.Finished) ||
+                    PendingClearanceBatches.Count > 0)
+                    result.Error = "当前已有未完成任务或搬运批次";
+                else
+                {
+                    var matches = API.Cargos.Where(c => c.Info?.Name == cargoName &&
+                        Convert.ToString(c.Tag) == cargoTag).ToList();
+                    if (matches.Count != 1)
+                        result.Error = matches.Count == 0 ? "未找到指定货物" : "货物类型与 Tag 匹配到多件货物";
+                    else if (!(API.GetOwner(matches[0]) is IStation station))
+                        result.Error = "货物当前不在站点，可能已在 AGV 上";
+                    else
+                    {
+                        result.FromMark = station.Mark;
+                        if (!IsExpectedCargoAtStation(station.Mark, cargoName, cargoTag))
+                            result.Error = "源站点必须仅有一件数量为 1 的指定货物";
+                        else if (CreateStationMoveTaskCore(station.Mark, toMark, agvName, cargoName, cargoTag))
+                            result.Success = true;
+                        else
+                            result.Error = "搬运创建失败，请检查目标货位、巷道配置、指定车辆和清障空间；详情见终端日志";
+                    }
+                }
+                Tools.trace($"[按货物搬运] 类型={cargoName}, Tag={cargoTag}, {result.FromMark} -> {toMark}, 成功={result.Success}, 原因={result.Error}");
+                return result;
+            }
+        }
+
+        bool IsExpectedCargoAtStation(string mark, string cargoName, string cargoTag)
+        {
+            var cargos = API.Cargos.Where(c => API.GetOwner(c) is IStation station &&
+                station.Mark == mark).ToList();
+            return cargos.Count == 1 && cargos[0].Info?.Name == cargoName &&
+                Convert.ToString(cargos[0].Tag) == cargoTag && cargos[0].Quanlity == 1;
+        }
+
+        bool ValidateExpectedCargo(TaskInfo info)
+        {
+            if (string.IsNullOrEmpty(info.ExpectedCargoName)) return true;
+            if (IsExpectedCargoAtStation(info.FromMark, info.ExpectedCargoName, info.ExpectedCargoTag))
+                return true;
+            info.Status = TaskStatus.NeedsReview;
+            WaitReason(info, $"指定货物 {info.ExpectedCargoName}/{info.ExpectedCargoTag} 已不在取货位或取货位存在其他货物，需核对");
+            return false;
+        }
+
+        bool CreateSimpleStationMoveTask(string fromMark, string toMark, string agvName = "00",
+            string cargoName = null, string cargoTag = null)
         {
             agvName = string.IsNullOrWhiteSpace(agvName) ? "00" : agvName;
 
@@ -99,6 +157,8 @@ namespace ProfControl
 
             var task = new TaskInfo
             {
+                ExpectedCargoName = cargoName,
+                ExpectedCargoTag = cargoTag,
                 FromMark = fromMark,
                 ToMark = toMark,
                 RequestedAgv = string.IsNullOrWhiteSpace(agvName) ? "00" : agvName,
@@ -128,7 +188,8 @@ namespace ProfControl
             }
         }
 
-        bool CreateStationMoveTaskCore(string targetMark, string toMark, string agvName)
+        bool CreateStationMoveTaskCore(string targetMark, string toMark, string agvName,
+            string cargoName = null, string cargoTag = null)
         {
             agvName = string.IsNullOrWhiteSpace(agvName) ? "00" : agvName;
 
@@ -226,7 +287,7 @@ namespace ProfControl
             if (blockingStations.Count == 0)
             {
                 Tools.trace("[点到点搬运] 未检测到阻挡货物，直接创建普通移库任务");
-                return CreateSimpleStationMoveTask(targetMark, toMark, agvName);
+                return CreateSimpleStationMoveTask(targetMark, toMark, agvName, cargoName, cargoTag);
             }
 
             foreach (var blockingStation in blockingStations)
@@ -261,6 +322,8 @@ namespace ProfControl
                 }
                 steps.Add(new TaskInfo
                 {
+                    ExpectedCargoName = blockingStation.Mark == targetMark ? cargoName : null,
+                    ExpectedCargoTag = blockingStation.Mark == targetMark ? cargoTag : null,
                     FromMark = blockingStation.Mark,
                     ToMark = clearanceStation.Mark,
                     DynamicDrop = false,
@@ -271,6 +334,8 @@ namespace ProfControl
 
             steps.Add(new TaskInfo
             {
+                ExpectedCargoName = cargoName,
+                ExpectedCargoTag = cargoTag,
                 FromMark = finalFromMark,
                 ToMark = toMark,
                 RequestedAgv = agvName,

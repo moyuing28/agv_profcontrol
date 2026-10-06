@@ -78,6 +78,10 @@ namespace ProfControl
             // ===== 留给后续 API 接入的内部函数示例，请保留注释 =====
             // CreateMoveTask("53", "20"); // 空车移动：目标站点 Mark、车辆名称；"00" 自动选车。
             // CreateStationMoveTask("72", "41", "00"); // 点到点搬运：起点 Mark、终点 Mark、车辆名称。
+            // var cargoTags = GetCargoTags("迈巴赫"); // 按货物类型查询编号下拉列表，返回 List<string>，例如 "000001"、"000002"；无匹配时为空列表。
+            // var mercedesTags = GetCargoTags("梅赛德斯"); // 换一个类型，只返回该类型的非空、去重、排序后的 Tag；包含站点和 AGV 上的货物。
+            // var cargoResult = CreateCargoMoveTask("迈巴赫", "000001", "目标空货位Mark"); // 类型 + Tag 自动定位起点。
+            // cargoResult.Success / cargoResult.Error：任务创建结果和失败原因；选择 cargoTags 中的编号作为上述第二个参数，能否搬运由创建函数检查。
             // var result = CreatePocketMoveBatch(new[] { "01" }, new[] { "03" }); // 巷道搬运：来源、目标子分类名称；不要传站点号。
             // var multiResult = CreatePocketMoveBatch(new[] { "01", "02", "03" }, new[] { "06", "07" }); // 不定长列表；目标按顺序填充。
             // result.RequiredCount / result.TargetCapacities：待搬数量及各目标可进入空位、预留、剩余容量。
@@ -87,11 +91,22 @@ namespace ProfControl
             // var pickStations = GetSelectableStations(true); // 有货的取货站点。
             // var dropStationsForApi = GetSelectableStations(false); // 可选卸货站点。
             // ===== 当前测试：切换时直接注释调用，不使用开关变量 =====
-            TestPocketMoveBatchCreation(new[] { "06", "07", "08", "09", "10" }, new[] { "01", "02", "03" }); // 按实际地图填写巷道子分类名称。
-            TestCargoBatchQueries(); // 创建后立即查询一次，检查全部等待明细。
+            var testCargoTags = GetCargoTags("迈巴赫");
+            Tools.trace($"[货物编号查询测试] 类型=迈巴赫，编号数量={testCargoTags.Count}，编号列表=[{string.Join(", ", testCargoTags)}]");
+            // TestPocketMoveBatchCreation(new[] { "06", "07", "08", "09", "10" }, new[] { "01", "02", "03" });
+            // TestCargoBatchQueries(); // 创建巷道批次后立即查询一次。
+            var testDropStation = GetSelectableStations(false).FirstOrDefault();
+            if (testDropStation == null)
+                Tools.trace("[货物搬运测试] 没有可选空货位，跳过测试");
+            else
+            {
+                var cargoResult = CreateCargoMoveTask("迈巴赫", "000001", testDropStation.StationMark);
+                Tools.trace($"[货物搬运测试] 迈巴赫/000001：{cargoResult.FromMark} -> {cargoResult.ToMark}，创建成功={cargoResult.Success}，原因={cargoResult.Error}");
+            }
             StartScheduler();
             // 查询测试：每 10 秒输出最新状态，不需要时直接注释这一行。
-            API.SetInterval(tc => TestCargoBatchQueries(), 10000);
+            // API.SetInterval(tc => TestCargoBatchQueries(), 10000); // 巷道批次进度查询。
+            API.SetInterval(tc => TraceCargoLocations("000001"), 10000);
             StartHttpApi();
         }
         #endregion
@@ -141,3 +156,5 @@ namespace ProfControl
             
            
                                                   
+  
+ 
