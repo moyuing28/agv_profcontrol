@@ -123,6 +123,7 @@
   <ItemGroup>
     <Compile Include="E:\www\wwwroot\ProfControlV8Update\script\SampleProject0927\AgvParking.cs" />
     <Compile Include="E:\www\wwwroot\ProfControlV8Update\script\SampleProject0927\CargoBatchManager.cs" />
+    <Compile Include="E:\www\wwwroot\ProfControlV8Update\script\SampleProject0927\CargoEditor.cs" />
     <Compile Include="E:\www\wwwroot\ProfControlV8Update\script\SampleProject0927\CargoInitializer.cs" />
     <Compile Include="E:\www\wwwroot\ProfControlV8Update\script\SampleProject0927\globalusing.cs" />
     <Compile Include="E:\www\wwwroot\ProfControlV8Update\script\SampleProject0927\HttpApi.cs" />

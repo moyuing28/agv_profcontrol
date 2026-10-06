@@ -3,32 +3,6 @@ namespace ProfControl
     public partial class SampleProject
     {
 
-        void GenerateCargo(List<IStation> targetStations)
-        {
-            var validStations = targetStations
-                .Where(s => s.CargoAreas != null && s.CargoAreas.Count > 0)
-                .ToList();
-
-            if (validStations.Count == 0) return;
-
-            API.ClearCargos(validStations.SelectMany(s => s.CargoAreas).Distinct().ToList());
-
-            var cargoNumber = 1;
-            foreach (var sta in validStations)
-            {
-                if (!sta.IsEmpty()) continue;
-
-                var area = sta.CargoAreas.First();
-                var cargo = area.CargoPlace("迈巴赫", 1);
-                if (cargo == null) continue;
-
-                cargo.Tag = cargoNumber.ToString("D6");
-                cargoNumber++;
-            }
-            Tools.trace($"GenerateCargo");
-            TraceCargoLocations();
-        }
-
         // 返回指定货物类型当前存在的非空 Tag，用于编号下拉列表。
         public List<string> GetCargoTags(string cargoName)
         {

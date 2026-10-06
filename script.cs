@@ -1,4 +1,4 @@
-namespace ProfControl
+﻿namespace ProfControl
 {
     public partial class SampleProject : IAppScript
     {
@@ -33,29 +33,26 @@ namespace ProfControl
         {
             LoadMapConfiguration();
 
-            var targetStations = new List<IStation>
-            {
-                API.GetStation("71"),
-                API.GetStation("72"),
-                API.GetStation("67"),
-                API.GetStation("68"),
-                API.GetStation("58"),
-                API.GetStation("59"),
-                API.GetStation("54"),
-                API.GetStation("55"),
-                API.GetStation("44"),
-                API.GetStation("45"),
-                API.GetStation("40"),
-                API.GetStation("41"),
-            };
-
             // 复用已加载的“车库位”分类，清空全部车库货位后再生成测试货物。
             var garageStations = GetMapCategory(GarageArea)?.Children;
             if (garageStations != null)
                 ClearCargo(garageStations);
             else
                 Tools.trace("[初始化清货] 未找到车库位分类，跳过清货");
-            GenerateCargo(targetStations);
+            // 初始化货物：类型、编号、站点。
+            AddCargo("迈巴赫", "000001", "71");
+            AddCargo("迈巴赫", "000002", "72");
+            AddCargo("迈巴赫", "000003", "67");
+            AddCargo("迈巴赫", "000004", "68");
+            AddCargo("迈巴赫", "000005", "58");
+            AddCargo("迈巴赫", "000006", "59");
+            AddCargo("迈巴赫", "000007", "54");
+            AddCargo("迈巴赫", "000008", "55");
+            AddCargo("迈巴赫", "000009", "44");
+            AddCargo("迈巴赫", "000010", "45");
+            AddCargo("迈巴赫", "000011", "40");
+            AddCargo("迈巴赫", "000012", "41");
+            TraceCargoLocations();
 
             //用于显示小车执行的任务类型及相关类型下的机器人状态
             API.QuickGProperty<IAgv, string>("状态", Dispatch.PPT.PropertyDetail.PropertyCtrlEnum.TextBox, false);
@@ -80,6 +77,11 @@ namespace ProfControl
             // CreateStationMoveTask("72", "41", "00"); // 点到点搬运：起点 Mark、终点 Mark、车辆名称。
             // var cargoTags = GetCargoTags("迈巴赫"); // 按货物类型查询编号下拉列表，返回 List<string>，例如 "000001"、"000002"；无匹配时为空列表。
             // var mercedesTags = GetCargoTags("梅赛德斯"); // 换一个类型，只返回该类型的非空、去重、排序后的 Tag；包含站点和 AGV 上的货物。
+            // var addResult = AddCargo("迈巴赫", "000013", "目标空货位Mark"); // 在对应朝向区域添加一件货物；类型需预先配置，类型 + Tag 不得重复。
+            // var editResult = UpdateCargo("迈巴赫", "000013", "梅赛德斯", "000008"); // 原类型、原Tag、新类型、新Tag；保持当前站点。
+            // var deleteResult = DeleteCargo("梅赛德斯", "000008"); // 删除指定实体货物，不清空整站或删除托盘。
+            // addResult/editResult/deleteResult 的 Success、Error 表示操作结果；CargoName、CargoTag、StationMark 返回货物信息。
+            // 货物编辑要求当前没有未完成任务/批次/巷道锁，修改和删除只允许站点内唯一的一件货物；拒绝编辑 AGV 上的货物。
             // var cargoResult = CreateCargoMoveTask("迈巴赫", "000001", "目标空货位Mark"); // 类型 + Tag 自动定位起点。
             // cargoResult.Success / cargoResult.Error：任务创建结果和失败原因；选择 cargoTags 中的编号作为上述第二个参数，能否搬运由创建函数检查。
             // var result = CreatePocketMoveBatch(new[] { "01" }, new[] { "03" }); // 巷道搬运：来源、目标子分类名称；不要传站点号。
@@ -90,6 +92,7 @@ namespace ProfControl
             // var detail = GetBatchDetail("填写创建成功返回的批次编号"); // 全部明细；找不到时为 null。
             // var pickStations = GetSelectableStations(true); // 有货的取货站点。
             // var dropStationsForApi = GetSelectableStations(false); // 可选卸货站点。
+
             // ===== 当前测试：切换时直接注释调用，不使用开关变量 =====
             var testCargoTags = GetCargoTags("迈巴赫");
             Tools.trace($"[货物编号查询测试] 类型=迈巴赫，编号数量={testCargoTags.Count}，编号列表=[{string.Join(", ", testCargoTags)}]");
@@ -158,3 +161,5 @@ namespace ProfControl
                                                   
   
  
+       
+  

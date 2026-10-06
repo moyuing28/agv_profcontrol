@@ -149,6 +149,15 @@ namespace ProfControl
             public string ExecutionStatusText { get; set; }
         }
 
+        public class CargoEditResult
+        {
+            public bool Success { get; set; }
+            public string Error { get; set; }
+            public string CargoName { get; set; }
+            public string CargoTag { get; set; }
+            public string StationMark { get; set; }
+        }
+
         public class CargoMoveCreateResult
         {
             public bool Success { get; set; }

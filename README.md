@@ -20,7 +20,8 @@
 | `TaskExecutor.cs` | 搬运状态机、库位朝向区域解析、车辆分配、容量预留、卸货准入和货物巷道锁 |
 | `ParkingDispatch.cs` | 动态停车位选择、停车巷道进出互斥及可出库车辆筛选 |
 | `AgvParking.cs` | 按 parkingstaID 初始化车辆位置、登记占用并加载停车巷道 |
-| `CargoInitializer.cs` | 清理并初始化测试货物，为实体货物写入六位 Tag，并通过宿主货物 API 查询、输出当前位置 |
+| `CargoInitializer.cs` | 清理货物区域、查询货物编号列表及输出当前位置 |
+| `CargoEditor.cs` | 添加、修改、删除单件货物，验证类型、编号、货位和任务冲突 |
 | `StationOptions.cs` | 查询有货站点及可选卸货站点；查询结果不等于可立即派车 |
 | `HttpApi.cs` | `/api/agvs`、`/api/tasks` 查询接口 |
 | `globalusing.cs` | 系统及宿主 API 的全局 using |
@@ -132,6 +133,11 @@ None / 业务调度派车
 
 ## 查询和当前测试入口
 
+- `AddCargo(cargoName, cargoTag, stationMark)`：使用已配置的 `CargoInfo` 在空车库货位对应朝向的货物区添加数量为 1 的实体，并写入 Tag；不会自动新建货物类型。类型 + Tag 必须唯一。
+- `UpdateCargo(cargoName, cargoTag, newCargoName, newCargoTag)`：精确找到原货物，修改实体的 Info 和 Tag，保持所在站点。新类型必须已配置，新类型 + Tag 不得与其他实体重复；修改后的地图外观需现场验证。
+- `DeleteCargo(cargoName, cargoTag)`：通过实际父容器的 `CargoTake(info, 1)` 取走指定货物，不清空整个货位或删除托盘。为避免按类型取走其他实体，修改、删除要求该站点内仅有一件数量为 1 的指定货物。
+- 上述函数返回 `CargoEditResult`（`Success`、`Error`、`CargoName`、`CargoTag`、`StationMark`），共用调度锁；存在未完成任务、批次、清障队列或巷道锁时拒绝编辑。AGV 上或不属于有效车库货位的货物拒绝修改、删除。编号作为字符串原样保存，不自动补零。
+- 添加、修改、删除货物已由用户现场测试成功，临时 `TestCargoEditing()` 和两处 5 秒观察延迟已移除。初始化不再创建或删除 `990001/990002`，开发者注释区继续保留三个编辑函数调用示例。
 - `GetCargoTags(cargoName)`：按 `CargoInfo.Name` 精确筛选当前实体货物，返回非空、去重并按字符串顺序排序的 `List<string>` Tag 列表，可直接用于编号下拉框。示例：`var tags = GetCargoTags("迈巴赫");`，返回类似 `["000001", "000002"]`；参数为空或无匹配时返回空列表。包含站点及 AGV 上的货物，列表不代表当前可搬运，也不能用去重后的列表检测重复编号；创建搬运时仍核验类型与 Tag 的唯一性。
 - `CreateCargoMoveTask(cargoName, cargoTag, toMark, agvName = "00")`：按 `CargoInfo.Name` 与实体 `Cargo.Tag` 精确定位货物，自动取得源站点，再复用点到点搬运及两端清障。示例：`var result = CreateCargoMoveTask("迈巴赫", "000001", "41");`；检查 `result.Success`、`result.Error`，返回值还包含类型、Tag、实际起点和目标站点。成功表示任务已创建，不代表搬运完成。
 - 不同类型可使用相同 Tag，同一类型与 Tag 必须唯一。新入口要求源站点仅有一件数量为 1 的指定货物；无匹配、重复匹配、货物不在站点、已有未完成任务时拒绝创建。目标必须满足现有点到点货位、巷道及清障要求；`"00"` 自动选车，其他值指定 AGV 名称。
@@ -140,13 +146,13 @@ None / 业务调度派车
 - `GetBatchDetail(batchId)`：全部业务明细及执行阶段快照，不存在返回 null。查询不会派车或推进状态。
 - 业务完成数以执行任务 `Finished` 为准，**包含回家停车**，不是仅卸货完成。
 - `HttpApi.cs` 当前仅映射 `/api/agvs`、`/api/tasks`，监听 `http://localhost:8088`。业务批次查询函数尚未映射为 HTTP 路由。
-- 当前初始化在 `LoadMapConfiguration()` 后，通过 `GetMapCategory(GarageArea)?.Children` 读取已缓存的“车库位”分类站点，调用 `ClearCargo()` 清空这些站点的全部货物区域，再通过 `GenerateCargo(targetStations)` 在指定站点生成测试货物，并按 `parkingstaID` 摆车。无需手填清货站点列表，也不重新扫描地图；清货不删除站点本身。
+- 当前初始化在 `LoadMapConfiguration()` 后，通过 `GetMapCategory(GarageArea)?.Children` 读取已缓存的“车库位”分类站点，调用 `ClearCargo()` 清空这些站点的全部货物区域，再逐行调用 `AddCargo("迈巴赫", 编号, 站点Mark)` 生成货物并打印全部货物位置，随后按 `parkingstaID` 摆车。无需手填清货站点列表，也不重新扫描地图；清货不删除站点本身。
 - “车库位”分类不存在时输出日志并跳过清货；没有货物区域的站点由 `ClearCargo()` 过滤。清货范围由“车库位”分类决定，不是地图中的所有站点。不能把重启脚本当作无副作用的恢复操作。
 - `script.cs` 当前初始化先调用 `GetCargoTags("迈巴赫")`，以 `[货物编号查询测试]` 打印实际返回的编号数量和完整列表；无匹配时显示数量 `0` 和列表 `[]`。然后自动选择 `GetSelectableStations(false)` 返回的第一个空货位，调用 `CreateCargoMoveTask("迈巴赫", "000001", 目标Mark)`，打印创建结果并启动调度；每 10 秒通过 `TraceCargoLocations("000001")` 打印当前位置。没有空货位时跳过搬运测试，创建失败时打印原因。
 - 初始化中的开发者注释区保留了 `GetCargoTags("迈巴赫")`、`GetCargoTags("梅赛德斯")` 和按类型、编号搬运的调用示例及返回值说明。原巷道批次创建、立即查询 `TestCargoBatchQueries()` 和每 10 秒批次查询均保留为注释，切换测试时取消相应注释并停用当前搬运测试，避免两个创建入口互相拒绝。
-- `CargoInitializer.cs` 的 `GenerateCargo()` 选择站点的 `CargoAreas.First()`，直接调用 `CargoPlace("迈巴赫", 1)` 放置货物，不再创建托盘。宿主工程必须预先存在名称为“迈巴赫”的 `CargoInfo`；初始化代码不再随机生成货物或容器信息。
-- 每件成功生成的测试货物通过实体 `Cargo.Tag` 写入从 `000001` 开始递增的六位编号。编号只在本次初始化期间有效，每次重新执行 `GenerateCargo()` 都从 `000001` 开始，顺序取决于传入站点列表。
-- `TraceCargoLocations(cargoTag)` 使用 `API.Cargos` 枚举货物，通过 `API.GetOwner(cargo)` 判断顶层拥有者，并以 `[货物位置]` 日志输出货物 Tag、类型以及所在站点或 AGV。参数为空时输出全部货物，传入例如 `"000001"` 时只查询该货物；`GenerateCargo()` 完成后自动调用一次无参查询。
+- 旧 `GenerateCargo()` 已移除，初始化改用 `AddCargo("迈巴赫", Tag, 站点Mark)`，根据站点朝向选择货物区并直接放置一件货物。宿主工程必须预先存在名称为“迈巴赫”的 `CargoInfo`；不随机生成货物或容器信息，也不创建托盘。
+- 初始化编号固定为 `000001` 至 `000012`，依次对应站点 `71、72、67、68、58、59、54、55、44、45、40、41`。初始化使用 12 行直接调用，不检查每行返回结果；需要查看失败原因时可接收 `CargoEditResult`。重新加载仍会清货并按该配置重新生成。
+- `TraceCargoLocations(cargoTag)` 使用 `API.Cargos` 枚举货物，通过 `API.GetOwner(cargo)` 判断顶层拥有者，并以 `[货物位置]` 日志输出货物 Tag、类型以及所在站点或 AGV。参数为空时输出全部货物，传入例如 `"000001"` 时只查询该货物；初始化添加完成后自动调用一次无参查询。
 - 并行执行上限当前为 4，调度周期 1000 ms。
 
 ## 已知边界与后续工作

@@ -124,6 +124,8 @@
     <Compile Include="AgvParking.cs" />
     <Compile Include="CargoBatchManager.cs" />
     <Compile Include="CargoInitializer.cs" />
+    <Compile Include="CargoEditor.cs" />
+    <Compile Include="CargoEditor.cs" />
     <Compile Include="globalusing.cs" />
     <Compile Include="HttpApi.cs" />
     <Compile Include="Models.cs" />
