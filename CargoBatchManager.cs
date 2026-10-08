@@ -121,9 +121,9 @@
                 case TaskStatus.Dropping: return "正在卸货";
                 case TaskStatus.Dropped: return "货物已放下，车辆尚未退出";
                 case TaskStatus.GoDropExit: return "货物已放下，车辆正在退出卸货巷道";
-                case TaskStatus.ExitedDrop: return "已退出卸货巷道，等待安排停车";
+                case TaskStatus.ExitedDrop: return "已退出卸货巷道，优先续接取货，否则安排停车";
                 case TaskStatus.GoHome: return "搬运已结束，车辆正在返回停车位";
-                case TaskStatus.Finished: return "任务完成，车辆已就位";
+                case TaskStatus.Finished: return "任务完成，车辆已续单或就位";
                 case TaskStatus.GoMove: return "车辆正在前往指定站点";
                 case TaskStatus.NeedsReview: return "已暂停，需要现场核对";
                 default: return "未知执行阶段";
@@ -262,7 +262,7 @@
         }
 
         // 仅在 ExecuteMoveTasks 的同一临界区调用，不与执行器并行修改资源。
-        void DispatchCargoBatch()
+        void DispatchCargoBatch(IAgv preferredAgv = null)
         {
             var batch = cargoMoveBatches.FirstOrDefault(b => b.Status != CargoBatchStatus.Completed);
             if (batch == null || batch.Status == CargoBatchStatus.NeedsReview || batch.MoveType == CargoMoveType.PointToPoint) return;
@@ -274,15 +274,17 @@
                 var item = batch.Items.Where(i => i.SourcePocketKey == key && i.Status == CargoTaskStatus.Waiting)
                     .OrderBy(i => i.PickSequence).FirstOrDefault();
                 if (item == null) continue;
-                DispatchCargoItem(batch, item);
+                DispatchCargoItem(batch, item, preferredAgv);
                 if (item.Status == CargoTaskStatus.Executing)
                     batch.NextSourceIndex = (index + 1) % batch.SourcePocketKeys.Count;
+                if (preferredAgv != null && TaskInfos.Any(t => t.WorkAgv == preferredAgv &&
+                    t.Status != TaskStatus.Finished)) return;
                 if (batch.Status == CargoBatchStatus.NeedsReview) return;
                 if (TaskInfos.Count(t => t.Status != TaskStatus.Finished) >= MaxParallelMoveTask) return;
             }
         }
 
-        void DispatchCargoItem(CargoMoveBatch batch, CargoMoveItem item)
+        void DispatchCargoItem(CargoMoveBatch batch, CargoMoveItem item, IAgv preferredAgv = null)
         {
             if (!string.IsNullOrEmpty(item.ExecutionTaskId))
             {
@@ -355,7 +357,7 @@
                 return;
             }
             info.LastWaitReason = null;
-            var agv = FindCargoAgv(info);
+            var agv = FindCargoAgv(info, preferredAgv);
             if (agv == null)
             {
                 // 尚未加入 TaskInfos，本次临时容量检查不构成持久预留。
@@ -417,13 +419,13 @@
                     if (changed)
                         Tools.trace($"[任务进度] 货物 {item.CargoName}/{item.CargoTag}｜当前步骤 {info.StepType}，搬运 {info.CargoName}/{info.CargoTag}｜车辆 {item.AssignedAgv}｜{info.FromMark} → {info.ToMark ?? "待分配"}｜{CargoStageText(info.Status)}{(string.IsNullOrEmpty(item.WaitReason) ? "" : "｜等待原因：" + item.WaitReason)}");
                     if (info.Status == TaskStatus.Finished)
-                        Tools.trace($"[整批进度] 已完成 {batch.CompletedCount}/{batch.TotalCount} 项（完成包含车辆回到停车位）");
+                        Tools.trace($"[整批进度] 已完成 {batch.CompletedCount}/{batch.TotalCount} 项（车辆已续接任务或回到停车位）");
                 }
                 if (batch.TotalCount > 0 && batch.CompletedCount == batch.TotalCount)
                 {
                     batch.Status = CargoBatchStatus.Completed;
                     batch.CompletedTime = DateTime.Now;
-                    Tools.trace($"[批次完成] {batch.MoveType}：{batch.SourceScopeId} → {batch.TargetScopeId}，全部 {batch.TotalCount} 项已完成，车辆已回到停车位。批次编号：{batch.BatchId}");
+                    Tools.trace($"[批次完成] {batch.MoveType}：{batch.SourceScopeId} → {batch.TargetScopeId}，全部 {batch.TotalCount} 项已完成，车辆已续接任务或回到停车位。批次编号：{batch.BatchId}");
                     foreach (var finished in batch.Items.OrderBy(i => i.PickSequence))
                         Tools.trace($"[搬运结果] 第{finished.PickSequence}项，货物 {finished.CargoName}/{finished.CargoTag}：取货位 {finished.SourceMark} → 卸货位 {finished.AssignedDropMark}，执行车辆 {finished.AssignedAgv}");
                 }

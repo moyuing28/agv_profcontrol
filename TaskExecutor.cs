@@ -15,7 +15,7 @@ namespace ProfControl
             UpdateParkingTrips();
 
             foreach (var info in TaskInfos
-                .Where(t => t.Status != TaskStatus.Finished))
+                .Where(t => t.Status != TaskStatus.Finished).ToList())
             {
                 switch (info.Status)
                 {
@@ -124,18 +124,13 @@ namespace ProfControl
                     case TaskStatus.GoDropExit:
                         if (Arrived(info, info.DropEntranceMark))
                         {
-                            ReleaseLock(info, true);
-                            ReleaseLock(info, false);
                             info.Status = TaskStatus.ExitedDrop;
-                            // 到出口立即申请回家，不等待巷道锁延迟释放。
-                            if (TryPark(info.WorkAgv)) info.Status = TaskStatus.GoHome;
-                            else WaitReason(info, "停车巷道暂不可进入，等待动态停车位");
+                            ContinueOrPark(info);
                         }
                         break;
 
                     case TaskStatus.ExitedDrop:
-                        if (TryPark(info.WorkAgv)) info.Status = TaskStatus.GoHome;
-                        else WaitReason(info, "停车巷道暂不可进入，保持当前位置等待动态停车位");
+                        ContinueOrPark(info);
                         break;
 
                     case TaskStatus.GoHome:
@@ -161,6 +156,73 @@ namespace ProfControl
             SyncCargoBatchProgress();
             DispatchCargoBatch();
 
+        }
+
+        // 调用方持有 cargoBatchSync：旧巷道保持锁定，先给旧车规划离开，再延迟解锁。
+        void ContinueOrPark(TaskInfo previous)
+        {
+            var agv = previous.WorkAgv;
+            if (!Arrived(previous, previous.DropEntranceMark)) return;
+
+            // 仅在本临界区内暂时释放车辆占用和并行名额，不释放旧巷道锁。
+            previous.Status = TaskStatus.Finished;
+            try
+            {
+                foreach (var id in PendingClearanceBatches.Keys.ToList())
+                    ActivateNextClearanceTask(id);
+
+                foreach (var next in TaskInfos.Where(t => t.Status == TaskStatus.None &&
+                    t.TaskType != TaskTypeEnum.移动任务).ToList())
+                {
+                    if (!ValidateExpectedCargo(next) || !ValidateBatchPickStation(next)) continue;
+                    AssignAgv(next, agv);
+                    if (TaskInfos.Any(t => t != previous && t.WorkAgv == agv &&
+                        t.Status != TaskStatus.Finished)) break;
+                }
+
+                if (!TaskInfos.Any(t => t != previous && t.WorkAgv == agv &&
+                    t.Status != TaskStatus.Finished))
+                    DispatchCargoBatch(agv);
+
+                var assigned = TaskInfos.FirstOrDefault(t => t != previous &&
+                    t.WorkAgv == agv && t.Status != TaskStatus.Finished);
+                if (assigned != null)
+                {
+                    if (assigned.Status == TaskStatus.NeedsReview)
+                    {
+                        previous.Status = TaskStatus.NeedsReview;
+                        WaitReason(previous, "续单派车结果不确定，保留原巷道锁，需现场核对");
+                        return;
+                    }
+                    ReleaseLock(previous, true);
+                    ReleaseLock(previous, false);
+                    previous.LastWaitReason = null;
+                    UpdateAgvView(assigned);
+                    Tools.trace($"[连续取货] AGV={agv.Name}, 下一取货位={assigned.FromMark}，原巷道延迟释放");
+                    return;
+                }
+
+                previous.Status = TaskStatus.ExitedDrop;
+                if (TryPark(agv))
+                {
+                    ReleaseLock(previous, true);
+                    ReleaseLock(previous, false);
+                    previous.Status = TaskStatus.GoHome;
+                    previous.LastWaitReason = null;
+                }
+                else WaitReason(previous, "没有可接取货任务且停车暂不可用，保留巷道锁等待离开指令");
+            }
+            catch (Exception ex)
+            {
+                previous.Status = TaskStatus.NeedsReview;
+                foreach (var next in TaskInfos.Where(t => t != previous &&
+                    t.WorkAgv == agv && t.Status != TaskStatus.Finished))
+                {
+                    next.Status = TaskStatus.NeedsReview;
+                    next.LastWaitReason = "续单派车结果不确定，需核对：" + ex.Message;
+                }
+                WaitReason(previous, "离开出口的派车结果不确定，保留原巷道锁，需核对：" + ex.Message);
+            }
         }
 
 
@@ -202,13 +264,13 @@ namespace ProfControl
             StartFromParking(info, info.ToMark, TaskStatus.GoMove);
         }
 
-        void AssignAgv(TaskInfo info)
+        void AssignAgv(TaskInfo info, IAgv preferredAgv = null)
         {
             var fromStation = API.GetStation(info.FromMark);
             if (fromStation == null) return;
             if (!PrepareEntrances(info) || !info.DropCapacityReserved || !OwnsLock(info, info.LockPickPocketKey)) return;
 
-            var agv = FindCargoAgv(info);
+            var agv = FindCargoAgv(info, preferredAgv);
             if (agv == null)
             {
                 WaitReason(info, "等待可用车辆");
@@ -219,11 +281,12 @@ namespace ProfControl
             StartFromParking(info, info.PickEntranceMark, TaskStatus.GoPickEntrance);
         }
 
-        IAgv FindCargoAgv(TaskInfo info)
+        IAgv FindCargoAgv(TaskInfo info, IAgv preferredAgv = null)
         {
             var fromStation = API.GetStation(info.FromMark);
             if (fromStation == null) return null;
             var availableAgvs = API.按条件找一些Agv(a =>
+                    (preferredAgv == null || a == preferredAgv) &&
                     a.IsFree() && CanLeaveParking(a) &&
                     !TaskInfos.Any(t => t.WorkAgv == a && t.Status != TaskStatus.Finished));
 
@@ -401,6 +464,9 @@ namespace ProfControl
         void UpdateAgvView(TaskInfo info)
         {
             if (info.WorkAgv == null) return;
+            // 旧步骤已完成并续单时，不能清空新步骤刚写入的车辆状态。
+            if (info.Status == TaskStatus.Finished && TaskInfos.Any(t => t != info &&
+                t.WorkAgv == info.WorkAgv && t.Status != TaskStatus.Finished)) return;
 
             info.WorkAgv.SetValue("状态", info.Status == TaskStatus.Finished ? "" : info.Status.ToString());
             info.WorkAgv.SetValue("任务类型", info.Status == TaskStatus.Finished ? "" : info.TaskType.ToString());

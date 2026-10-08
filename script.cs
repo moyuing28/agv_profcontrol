@@ -98,8 +98,8 @@ namespace ProfControl
             // ===== 当前测试：切换时直接注释调用，不使用开关变量 =====
             var testCargoTags = GetCargoTags("迈巴赫");
             Tools.trace($"[货物编号查询测试] 类型=迈巴赫，编号数量={testCargoTags.Count}，编号列表=[{string.Join(", ", testCargoTags)}]");
-            // TestPocketMoveBatchCreation(new[] { "06", "07", "08", "09", "10" }, new[] { "01", "02", "03" });
-            TestCargoMoveCreation(); // 单件搬运测试；与上面的巷道搬运测试轮流注释，只启用一个。
+            TestPocketMoveBatchCreation(new[] { "06", "07", "08", "09", "10" }, new[] { "01", "02", "03" });
+//            TestCargoMoveCreation(); // 单件搬运测试；与上面的巷道搬运测试轮流注释，只启用一个。
             TestCargoBatchQueries(); // 两种搬运共用同一批次详情查询。
             StartScheduler();
             // 查询测试：每 10 秒输出最新状态，不需要时直接注释这一行。
@@ -158,4 +158,4 @@ namespace ProfControl
  
        
   
-    
+          
