@@ -71,6 +71,7 @@ namespace ProfControl
             });
 
             InitAgvParking();
+            //SimulationDataExporter.ExportAll();//提取matlab仿真需要的地图数据用于算法验证，没事别打开
 
             // ===== 留给后续 API 接入的内部函数示例，请保留注释 =====
             // CreateMoveTask("53", "20"); // 空车移动：目标站点 Mark、车辆名称；"00" 自动选车。
@@ -158,4 +159,4 @@ namespace ProfControl
  
        
   
-          
+                   
