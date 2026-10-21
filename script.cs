@@ -4,12 +4,20 @@ namespace ProfControl
     {
         #region 参数配置
         const int MaxParallelMoveTask = 4; // 允许前车卸货、后车取货重叠
-        const int PickDropDelay = 5;
+        const int PickDropDelay = 10;
 
         const string GarageArea = "车库位";
         readonly string[] GarageDirectionAreas =
         {
             "车库位朝右", "车库位朝上", "车库位朝左", "车库位朝下"
+        };
+        // 卸货目标并行组：同一组内的巷道可以同时进车卸货，整组装满后才使用下一组。
+        // 未出现在分组中的批次目标按批次目标列表顺序追加到最后一组。
+        readonly string[][] 卸货目标并行组 =
+        {
+            new[] { "01","02"},
+            new[] { "03","04"},
+            new[] { "05" }
         };
         List<string> 巷道子分类名称 = new List<string>
         {
@@ -52,6 +60,24 @@ namespace ProfControl
             AddCargo("迈巴赫", "000010", "45");
             AddCargo("迈巴赫", "000011", "40");
             AddCargo("迈巴赫", "000012", "41");
+            AddCargo("迈巴赫", "000013", "36");
+            AddCargo("迈巴赫", "000014", "37");
+            AddCargo("迈巴赫", "000015", "24");
+            AddCargo("迈巴赫", "000016", "25");
+            AddCargo("迈巴赫", "000017", "15");
+            AddCargo("迈巴赫", "000018", "19");
+            AddCargo("迈巴赫", "000019", "32");
+            AddCargo("迈巴赫", "000020", "8");
+            AddCargo("迈巴赫", "000021", "73");
+            AddCargo("迈巴赫", "000022", "69");
+            AddCargo("迈巴赫", "000023", "60");
+            AddCargo("迈巴赫", "000024", "56");
+            AddCargo("迈巴赫", "000025", "46");
+            AddCargo("迈巴赫", "000026", "42");
+            AddCargo("迈巴赫", "000027", "38");
+            AddCargo("迈巴赫", "000028", "26");
+            AddCargo("迈巴赫", "000029", "21");
+            AddCargo("迈巴赫", "000030", "10");
             TraceCargoLocations();
 
             //用于显示小车执行的任务类型及相关类型下的机器人状态
@@ -99,8 +125,10 @@ namespace ProfControl
             // ===== 当前测试：切换时直接注释调用，不使用开关变量 =====
             var testCargoTags = GetCargoTags("迈巴赫");
             Tools.trace($"[货物编号查询测试] 类型=迈巴赫，编号数量={testCargoTags.Count}，编号列表=[{string.Join(", ", testCargoTags)}]");
-            TestPocketMoveBatchCreation(new[] { "06", "07", "08", "09", "10" }, new[] { "01", "02", "03" });
-//            TestCargoMoveCreation(); // 单件搬运测试；与上面的巷道搬运测试轮流注释，只启用一个。
+            TestPocketMoveBatchCreation(
+            new[] { "06", "07", "08", "09", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", },
+            new[] { "01", "02", "03", "04", "05" });
+            //            TestCargoMoveCreation(); // 单件搬运测试；与上面的巷道搬运测试轮流注释，只启用一个。
             TestCargoBatchQueries(); // 两种搬运共用同一批次详情查询。
             StartScheduler();
             // 查询测试：每 10 秒输出最新状态，不需要时直接注释这一行。
@@ -135,28 +163,28 @@ namespace ProfControl
         }
 
         public void Kill() { }
-        
+
     }
 }
- 
-                                       
-         
-   
- 
- 
-   
-             
- 
- 
-    
-   
-      
-             
-            
-           
-                                                  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
   
- 
-       
-  
-                   

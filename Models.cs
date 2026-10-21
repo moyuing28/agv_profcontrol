@@ -66,6 +66,8 @@ namespace ProfControl
             public List<string> SourcePocketKeys { get; set; } = new List<string>();
             public List<string> TargetPocketKeys { get; set; } = new List<string>();
             internal int NextSourceIndex { get; set; }
+            // 各卸货分组内的轮转位置，保证同组巷道严格按配置顺序轮流进车（01 → 02 → 03 → 04 → 01 …）。
+            internal Dictionary<int, int> DropGroupRotation { get; set; } = new Dictionary<int, int>();
             public CargoBatchStatus Status { get; set; } = CargoBatchStatus.Waiting;
             public DateTime CreatedTime { get; set; } = DateTime.Now;
             public DateTime? CompletedTime { get; set; }
@@ -227,6 +229,8 @@ namespace ProfControl
             // 巷道锁（取货 + 卸货）
             public string LockPickPocketKey { get; set; }
             public string LockDropPocketKey { get; set; }
+            // 连续作业交接：上一段任务仍持有的卸货巷道锁，等本段任务到达取货巷道入口时释放。
+            public TaskInfo PendingDropLockTask { get; set; }
             // 清障步骤组：串行清理取卸货两端阻碍 + 搬走目标货物，不包含自动归位。
             public string ClearanceBatchId { get; set; }
             public int ClearanceSequence { get; set; }

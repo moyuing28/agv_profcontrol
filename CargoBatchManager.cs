@@ -1,9 +1,11 @@
-﻿namespace ProfControl
+namespace ProfControl
 {
     public partial class SampleProject
     {
         readonly object cargoBatchSync = new object();
         readonly List<CargoMoveBatch> cargoMoveBatches = new List<CargoMoveBatch>();
+        // 已提示过的卸货并行组下标，仅在真正跨组时输出一次日志。
+        int lastTracedDropGroupIndex;
 
         bool HasOpenCargoBatch() => cargoMoveBatches.Any(b => b.Status != CargoBatchStatus.Completed);
 
@@ -190,6 +192,7 @@
                     return rejected;
                 }
                 cargoMoveBatches.Add(batch);
+                lastTracedDropGroupIndex = 0;
                 return new CargoBatchCreateResult
                 {
                     Success = true, Batch = batch, RequiredCount = batch.TotalCount, TargetCapacities = capacities
@@ -284,6 +287,66 @@
             }
         }
 
+        // 卸货目标分组：按“卸货目标并行组”的配置顺序展开批次目标，组内巷道可同时卸货。
+        // 未出现在分组配置中的批次目标，按批次目标列表顺序追加为最后一组。
+        List<List<string>> GetBatchDropGroups(CargoMoveBatch batch)
+        {
+            var groups = new List<List<string>>();
+            var covered = new HashSet<string>();
+            foreach (var configGroup in 卸货目标并行组)
+            {
+                var group = new List<string>();
+                // 按配置顺序建组，不受调用方传入顺序影响。
+                foreach (var name in configGroup)
+                {
+                    var index = batch.TargetPocketNames.FindIndex(n => n == name);
+                    if (index < 0) continue;
+                    var key = batch.TargetPocketKeys[index];
+                    if (!covered.Add(key)) continue;
+                    group.Add(key);
+                }
+                if (group.Count > 0) groups.Add(group);
+            }
+            var rest = new List<string>();
+            for (var i = 0; i < batch.TargetPocketKeys.Count; i++)
+            {
+                if (!covered.Add(batch.TargetPocketKeys[i])) continue;
+                rest.Add(batch.TargetPocketKeys[i]);
+            }
+            if (rest.Count > 0) groups.Add(rest);
+            return groups;
+        }
+
+        // 组内严格按配置顺序轮转进车：01 → 02 → 03 → 04 → 01 …，某条放不下才跳过它顺延；
+        // 整组都没有余量时才使用下一组（例如 01~04 装满后才用 05）。
+        string SelectDropPocketKey(CargoMoveBatch batch, TaskInfo info)
+        {
+            var groups = GetBatchDropGroups(batch);
+            for (var groupIndex = 0; groupIndex < groups.Count; groupIndex++)
+            {
+                var group = groups[groupIndex];
+                // 每组记住上次派到哪条巷道，下一件从其下一条开始，保证先后顺序不乱。
+                batch.DropGroupRotation.TryGetValue(groupIndex, out var start);
+                for (var offset = 0; offset < group.Count; offset++)
+                {
+                    var index = (start + offset) % group.Count;
+                    var key = group[index];
+                    if (AvailableDropCount(key) <= 0) continue;
+                    info.DropPocketKey = key;
+                    if (!PrepareEntrances(info) || !ReserveDropCapacity(info)) continue;
+                    batch.DropGroupRotation[groupIndex] = (index + 1) % group.Count;
+                    // 只在真正跨组时输出一次，避免逐件刷屏。
+                    if (groupIndex > lastTracedDropGroupIndex)
+                    {
+                        lastTracedDropGroupIndex = groupIndex;
+                        Tools.trace($"[卸货目标] 前 {groupIndex} 组已装满，改用第 {groupIndex + 1} 组巷道 {batch.TargetPocketNames[batch.TargetPocketKeys.IndexOf(key)]}");
+                    }
+                    return key;
+                }
+            }
+            return null;
+        }
+
         void DispatchCargoItem(CargoMoveBatch batch, CargoMoveItem item, IAgv preferredAgv = null)
         {
             if (!string.IsNullOrEmpty(item.ExecutionTaskId))
@@ -345,13 +408,9 @@
                 LastWaitReason = item.WaitReason,
                 TaskType = TaskTypeEnum.移库任务
             };
-            // 按目标列表顺序填充；在途预留计入容量，通行锁忙不代表没有容量。
-            foreach (var key in batch.TargetPocketKeys)
-            {
-                info.DropPocketKey = key;
-                if (PrepareEntrances(info) && ReserveDropCapacity(info)) break;
-            }
-            if (!info.DropCapacityReserved)
+            // 按卸货并行组选择目标：同组多巷道同时卸货，整组装满后才转下一组；
+            // 在途预留计入容量，通行锁忙不代表没有容量。
+            if (string.IsNullOrEmpty(SelectDropPocketKey(batch, info)))
             {
                 SetCargoItemWaiting(item, "所有目标巷道均无可用容量或配置异常，等待重新检查");
                 return;
@@ -463,3 +522,4 @@
         }
     }
 }
+    

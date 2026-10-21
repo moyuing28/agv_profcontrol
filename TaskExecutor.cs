@@ -38,8 +38,13 @@ namespace ProfControl
                         break;
 
                     case TaskStatus.GoPickEntrance:
-                        if (Arrived(info, info.PickEntranceMark) && ValidateExpectedCargo(info) && ValidateBatchPickStation(info))
-                            MoveStage(info, info.FromMark, "pick", TaskStatus.GoPick);
+                        if (Arrived(info, info.PickEntranceMark))
+                        {
+                            // 已到达本段任务的取货巷道入口，释放上一段任务交接过来的卸货巷道锁。
+                            RecyclePendingDropLock(info);
+                            if (ValidateExpectedCargo(info) && ValidateBatchPickStation(info))
+                                MoveStage(info, info.FromMark, "pick", TaskStatus.GoPick);
+                        }
                         break;
 
                     case TaskStatus.GoPick:
@@ -194,11 +199,14 @@ namespace ProfControl
                         WaitReason(previous, "续单派车结果不确定，保留原巷道锁，需现场核对");
                         return;
                     }
-                    ReleaseLock(previous, true);
-                    ReleaseLock(previous, false);
+                    // 取货锁正常流程已在驶出取货巷道时释放；同巷道取卸时取货锁与卸货锁同键，须保留。
+                    if (previous.LockPickPocketKey != previous.LockDropPocketKey)
+                        ReleaseLock(previous, true);
+                    // 卸货巷道锁不在此处释放：交接给下一段任务，等它到达取货巷道入口再解锁。
+                    assigned.PendingDropLockTask = previous;
                     previous.LastWaitReason = null;
                     UpdateAgvView(assigned);
-                    Tools.trace($"[连续取货] AGV={agv.Name}, 下一取货位={assigned.FromMark}，原巷道延迟释放");
+                    Tools.trace($"[连续取货] AGV={agv.Name}, 下一取货位={assigned.FromMark}，卸货巷道锁交接至到达取货巷道入口时释放");
                     return;
                 }
 
@@ -374,6 +382,16 @@ namespace ProfControl
                 .Reverse().ToList();
         }
 
+        // 只查询不预留：目标巷道当前还能分配多少件（可进入空位减去在途预留）。
+        // 用于派车前比较各目标巷道余量，不产生临时预留，也不写等待原因。
+        int AvailableDropCount(string key)
+        {
+            var probe = new TaskInfo { DropPocketKey = key, DynamicDrop = true };
+            var slots = DropSlots(probe);
+            var reserved = TaskInfos.Count(t => t.DropCapacityReserved && t.DropPocketKey == key);
+            return Math.Max(0, slots.Count - reserved);
+        }
+
         bool ReserveDropCapacity(TaskInfo info)
         {
             if (string.IsNullOrEmpty(info.DropPocketKey))
@@ -459,6 +477,20 @@ namespace ProfControl
             }
             if (pick) info.LockPickPocketKey = null;
             else info.LockDropPocketKey = null;
+        }
+
+        // 连续作业交接：本段任务到达取货巷道入口后，释放上一段任务仍持有的卸货巷道锁。
+        void RecyclePendingDropLock(TaskInfo info)
+        {
+            var pending = info.PendingDropLockTask;
+            if (pending == null) return;
+            info.PendingDropLockTask = null;
+            // 同巷道取卸时取货锁与卸货锁同键，随卸货锁一并清空引用。
+            var samePocket = !string.IsNullOrEmpty(pending.LockPickPocketKey) &&
+                pending.LockPickPocketKey == pending.LockDropPocketKey;
+            Tools.trace($"[巷道锁交接] AGV={info.WorkAgv?.Name}, 到达取货巷道入口={info.PickEntranceMark}，释放上一段卸货巷道锁={pending.LockDropPocketKey}");
+            ReleaseLock(pending, false);
+            if (samePocket) pending.LockPickPocketKey = null;
         }
 
         void UpdateAgvView(TaskInfo info)
