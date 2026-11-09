@@ -23,8 +23,6 @@ namespace ProfControl
             GoPickEntrance,
             GoPickExit,
             GoDropEntrance,
-            GoDropExit,
-            ExitedDrop,
             GoParkingExit,
             NeedsReview,
         }
@@ -65,7 +63,8 @@ namespace ProfControl
             public List<string> TargetPocketNames { get; set; } = new List<string>();
             public List<string> SourcePocketKeys { get; set; } = new List<string>();
             public List<string> TargetPocketKeys { get; set; } = new List<string>();
-            internal int NextSourceIndex { get; set; }
+            // 各取货优先级组内的轮转位置，保证同组来源巷道按配置顺序轮流取货（06 → 07 → … → 06）。
+            internal Dictionary<int, int> PickGroupRotation { get; set; } = new Dictionary<int, int>();
             // 各卸货分组内的轮转位置，保证同组巷道严格按配置顺序轮流进车（01 → 02 → 03 → 04 → 01 …）。
             internal Dictionary<int, int> DropGroupRotation { get; set; } = new Dictionary<int, int>();
             public CargoBatchStatus Status { get; set; } = CargoBatchStatus.Waiting;

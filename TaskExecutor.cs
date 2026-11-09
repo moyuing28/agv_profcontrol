@@ -12,6 +12,7 @@ namespace ProfControl
         void ExecuteMoveTasksCore()
         {
             UpdateDelayedLockReleases();
+            UpdateExitLockReleases();
             UpdateParkingTrips();
 
             foreach (var info in TaskInfos
@@ -122,19 +123,8 @@ namespace ProfControl
                         }
                         break;
 
+                    // 卸货完成后不再经过卸货巷道出口，直接续接下一件货物或回家。
                     case TaskStatus.Dropped:
-                        MoveStage(info, info.DropEntranceMark, TaskStatus.GoDropExit);
-                        break;
-
-                    case TaskStatus.GoDropExit:
-                        if (Arrived(info, info.DropEntranceMark))
-                        {
-                            info.Status = TaskStatus.ExitedDrop;
-                            ContinueOrPark(info);
-                        }
-                        break;
-
-                    case TaskStatus.ExitedDrop:
                         ContinueOrPark(info);
                         break;
 
@@ -163,11 +153,12 @@ namespace ProfControl
 
         }
 
-        // 调用方持有 cargoBatchSync：旧巷道保持锁定，先给旧车规划离开，再延迟解锁。
+        // 调用方持有 cargoBatchSync：卸完货即尝试续接下一件货物，直接前往下一取货巷道入口；
+        // 没有可接任务时直接回家，旧巷道锁保持到车辆驶出巷道或交接给下一段任务。
         void ContinueOrPark(TaskInfo previous)
         {
             var agv = previous.WorkAgv;
-            if (!Arrived(previous, previous.DropEntranceMark)) return;
+            if (agv == null || !agv.IsFree()) return;
 
             // 仅在本临界区内暂时释放车辆占用和并行名额，不释放旧巷道锁。
             previous.Status = TaskStatus.Finished;
@@ -210,15 +201,18 @@ namespace ProfControl
                     return;
                 }
 
-                previous.Status = TaskStatus.ExitedDrop;
+                // 没有可接任务直接回家；车辆仍停在卸货巷道内，等驶出该巷道后再释放卸货巷道锁。
+                previous.Status = TaskStatus.Dropped;
                 if (TryPark(agv))
                 {
-                    ReleaseLock(previous, true);
-                    ReleaseLock(previous, false);
+                    if (previous.LockPickPocketKey != previous.LockDropPocketKey)
+                        ReleaseLock(previous, true);
+                    if (!string.IsNullOrEmpty(previous.LockDropPocketKey))
+                        pendingExitLockReleases.Add((previous, previous.LockDropPocketKey));
                     previous.Status = TaskStatus.GoHome;
                     previous.LastWaitReason = null;
                 }
-                else WaitReason(previous, "没有可接取货任务且停车暂不可用，保留巷道锁等待离开指令");
+                else WaitReason(previous, "没有可接取货任务且停车暂不可用，原地等待停车位");
             }
             catch (Exception ex)
             {
@@ -229,7 +223,7 @@ namespace ProfControl
                     next.Status = TaskStatus.NeedsReview;
                     next.LastWaitReason = "续单派车结果不确定，需核对：" + ex.Message;
                 }
-                WaitReason(previous, "离开出口的派车结果不确定，保留原巷道锁，需核对：" + ex.Message);
+                WaitReason(previous, "卸货完成后的续单结果不确定，保留原巷道锁，需核对：" + ex.Message);
             }
         }
 
@@ -334,6 +328,29 @@ namespace ProfControl
             {
                 delayedLockReleases.Remove(pending);
                 pending.Release();
+            }
+        }
+
+        // 直接从卸货位离开的任务仍停在巷道内，只有确认驶出该巷道后才登记延迟释放。
+        readonly List<(TaskInfo Info, string Key)> pendingExitLockReleases = new List<(TaskInfo, string)>();
+
+        void UpdateExitLockReleases()
+        {
+            foreach (var pending in pendingExitLockReleases.ToList())
+            {
+                var agv = pending.Info.WorkAgv;
+                // 途中 On 可能为空或提前指向目标点，只在车辆停稳且不在本巷道站点时才视为驶出。
+                if (agv == null || !agv.IsFree()) continue;
+                var on = agv.API.On;
+                if (string.IsNullOrEmpty(on)) continue;
+                var pocket = GetCargoPocket(pending.Key);
+                if (pocket != null && pocket.Stations.Any(s => s.Mark == on)) continue;
+                pendingExitLockReleases.Remove(pending);
+                if (pending.Info.LockDropPocketKey != pending.Key) continue;
+                Tools.trace($"[巷道释放] AGV={agv.Name}, 已驶出卸货巷道 {pending.Key}，停在站点 {on}");
+                ReleaseLock(pending.Info, false);
+                // 同巷道取卸时取货锁与卸货锁同键，随卸货锁一并清空。
+                if (pending.Info.LockPickPocketKey == pending.Key) pending.Info.LockPickPocketKey = null;
             }
         }
 

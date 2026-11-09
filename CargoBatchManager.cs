@@ -6,6 +6,8 @@ namespace ProfControl
         readonly List<CargoMoveBatch> cargoMoveBatches = new List<CargoMoveBatch>();
         // 已提示过的卸货并行组下标，仅在真正跨组时输出一次日志。
         int lastTracedDropGroupIndex;
+        // 已提示过的取货优先级组下标，仅在真正跨组取货时输出一次日志。
+        int lastTracedPickGroupIndex;
 
         bool HasOpenCargoBatch() => cargoMoveBatches.Any(b => b.Status != CargoBatchStatus.Completed);
 
@@ -121,9 +123,7 @@ namespace ProfControl
                 case TaskStatus.GoDropEntrance: return "前往卸货巷道入口";
                 case TaskStatus.GoDrop: return "进入巷道，前往卸货位";
                 case TaskStatus.Dropping: return "正在卸货";
-                case TaskStatus.Dropped: return "货物已放下，车辆尚未退出";
-                case TaskStatus.GoDropExit: return "货物已放下，车辆正在退出卸货巷道";
-                case TaskStatus.ExitedDrop: return "已退出卸货巷道，优先续接取货，否则安排停车";
+                case TaskStatus.Dropped: return "货物已放下，等待续接下一件货物或回家";
                 case TaskStatus.GoHome: return "搬运已结束，车辆正在返回停车位";
                 case TaskStatus.Finished: return "任务完成，车辆已续单或就位";
                 case TaskStatus.GoMove: return "车辆正在前往指定站点";
@@ -161,6 +161,7 @@ namespace ProfControl
                     TargetPocketKeys = targetKeys,
                     TargetPocketKey = targetKeys.Count == 1 ? targetKeys[0] : null
                 };
+                var pickGroups = GetBatchPickGroups(batch);
                 foreach (var sourceKey in sourceKeys)
                 {
                     var cargoStations = GetCargoPocket(sourceKey).Slots.Where(s => !s.IsEmpty()).Reverse().ToList();
@@ -184,15 +185,15 @@ namespace ProfControl
                 if (batch.TotalCount == 0) return RejectCargoBatch("所有来源巷道均没有待搬运货物");
                 var capacities = GetTargetCapacities(batch);
                 var available = capacities.Sum(c => c.AvailableCount);
+                // 容量按派车进度逐件校验：整批货物可能多于当前空位，前面的货腾出位置后
+                // 后面的明细才能派车，所以创建时不再整批拒绝，只在容量不足时提示。
                 if (available < batch.TotalCount)
-                {
-                    var rejected = RejectCargoBatch($"目标容量不足：待搬 {batch.TotalCount} 件，可用容量 {available} 件，缺少 {batch.TotalCount - available} 个货位");
-                    rejected.RequiredCount = batch.TotalCount;
-                    rejected.TargetCapacities = capacities;
-                    return rejected;
-                }
+                    Tools.trace($"[批次创建] 待搬 {batch.TotalCount} 件，目标当前可用容量 {available} 件；按派车进度逐件分配，暂缺容量的明细会等待");
                 cargoMoveBatches.Add(batch);
                 lastTracedDropGroupIndex = 0;
+                lastTracedPickGroupIndex = 0;
+                if (pickGroups.Count > 1)
+                    Tools.trace($"[取货顺序] 本批次共 {batch.TotalCount} 件，按顺序先派巷道 {PickGroupNames(batch, pickGroups[0])}，然后依次派 {string.Join("；", pickGroups.Skip(1).Select(g => PickGroupNames(batch, g)))}");
                 return new CargoBatchCreateResult
                 {
                     Success = true, Batch = batch, RequiredCount = batch.TotalCount, TargetCapacities = capacities
@@ -265,26 +266,91 @@ namespace ProfControl
         }
 
         // 仅在 ExecuteMoveTasks 的同一临界区调用，不与执行器并行修改资源。
+        // 06~25 是同一条搬运流程：按取货优先级组的顺序从前往后派车，
+        // 前面的巷道暂时没有可派明细（车道占用、外侧未清、容量暂缺）时，
+        // 空闲车辆接着派后面的巷道，全程连续作业，不返程、不重建任务。
         void DispatchCargoBatch(IAgv preferredAgv = null)
         {
             var batch = cargoMoveBatches.FirstOrDefault(b => b.Status != CargoBatchStatus.Completed);
             if (batch == null || batch.Status == CargoBatchStatus.NeedsReview || batch.MoveType == CargoMoveType.PointToPoint) return;
-            var start = batch.NextSourceIndex;
-            for (var offset = 0; offset < batch.SourcePocketKeys.Count; offset++)
+            var groups = GetBatchPickGroups(batch);
+            for (var groupIndex = 0; groupIndex < groups.Count; groupIndex++)
             {
-                var index = (start + offset) % batch.SourcePocketKeys.Count;
-                var key = batch.SourcePocketKeys[index];
+                var group = groups[groupIndex];
+                var dispatched = DispatchCargoGroup(batch, group, groupIndex, preferredAgv);
+                if (dispatched > 0 && groupIndex > lastTracedPickGroupIndex)
+                {
+                    // 前面的巷道暂时派不出车才轮到这一段，只提示一次。
+                    lastTracedPickGroupIndex = groupIndex;
+                    Tools.trace($"[取货顺序] 前面的来源巷道暂无可用车辆派车，已接着派巷道 {PickGroupNames(batch, group)}");
+                }
+                if (batch.Status == CargoBatchStatus.NeedsReview) return;
+                if (preferredAgv != null && TaskInfos.Any(t => t.WorkAgv == preferredAgv &&
+                    t.Status != TaskStatus.Finished)) return;
+                if (TaskInfos.Count(t => t.Status != TaskStatus.Finished) >= MaxParallelMoveTask) return;
+            }
+        }
+
+        // 来源取货优先级组：按“取货优先级组”的配置顺序展开批次来源，
+        // 未出现在配置中的来源按批次来源列表顺序追加为最后一组。
+        List<List<string>> GetBatchPickGroups(CargoMoveBatch batch)
+        {
+            var groups = new List<List<string>>();
+            var covered = new HashSet<string>();
+            foreach (var configGroup in 取货优先级组)
+            {
+                var group = new List<string>();
+                // 按配置顺序建组，不受调用方传入顺序影响。
+                foreach (var name in configGroup)
+                {
+                    var index = batch.SourcePocketNames.FindIndex(n => n == name);
+                    if (index < 0) continue;
+                    var key = batch.SourcePocketKeys[index];
+                    if (!covered.Add(key)) continue;
+                    group.Add(key);
+                }
+                if (group.Count > 0) groups.Add(group);
+            }
+            var rest = new List<string>();
+            for (var i = 0; i < batch.SourcePocketKeys.Count; i++)
+            {
+                if (!covered.Add(batch.SourcePocketKeys[i])) continue;
+                rest.Add(batch.SourcePocketKeys[i]);
+            }
+            if (rest.Count > 0) groups.Add(rest);
+            return groups;
+        }
+
+        string PickGroupNames(CargoMoveBatch batch, List<string> group)
+        {
+            return string.Join("、", group.Select(key => batch.SourcePocketNames[batch.SourcePocketKeys.IndexOf(key)]));
+        }
+
+        // 组内按来源巷道轮转取货，某来源暂不可用时不阻塞同组及后续巷道的其他来源。
+        // 返回本次实际派出的车辆数，供上层判断是否真的用到了这一段巷道。
+        int DispatchCargoGroup(CargoMoveBatch batch, List<string> group, int groupIndex, IAgv preferredAgv)
+        {
+            var dispatched = 0;
+            batch.PickGroupRotation.TryGetValue(groupIndex, out var start);
+            for (var offset = 0; offset < group.Count; offset++)
+            {
+                var index = (start + offset) % group.Count;
+                var key = group[index];
                 var item = batch.Items.Where(i => i.SourcePocketKey == key && i.Status == CargoTaskStatus.Waiting)
                     .OrderBy(i => i.PickSequence).FirstOrDefault();
                 if (item == null) continue;
+                if (TaskInfos.Count(t => t.Status != TaskStatus.Finished) >= MaxParallelMoveTask) return dispatched;
                 DispatchCargoItem(batch, item, preferredAgv);
                 if (item.Status == CargoTaskStatus.Executing)
-                    batch.NextSourceIndex = (index + 1) % batch.SourcePocketKeys.Count;
+                {
+                    dispatched++;
+                    batch.PickGroupRotation[groupIndex] = (index + 1) % group.Count;
+                }
                 if (preferredAgv != null && TaskInfos.Any(t => t.WorkAgv == preferredAgv &&
-                    t.Status != TaskStatus.Finished)) return;
-                if (batch.Status == CargoBatchStatus.NeedsReview) return;
-                if (TaskInfos.Count(t => t.Status != TaskStatus.Finished) >= MaxParallelMoveTask) return;
+                    t.Status != TaskStatus.Finished)) return dispatched;
+                if (batch.Status == CargoBatchStatus.NeedsReview) return dispatched;
             }
+            return dispatched;
         }
 
         // 卸货目标分组：按“卸货目标并行组”的配置顺序展开批次目标，组内巷道可同时卸货。
