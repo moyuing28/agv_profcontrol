@@ -253,3 +253,5 @@ README 是文档，不加入 csproj 的 `Compile` 项；`project.config` 的 `Co
 ## 仿真与实机取放货完成判断
 
 在 script.cs 中配置 SimulatePickDrop：默认 true，仿真使用 PickDropDelay（当前10秒）；实机运行前改为 false，取货和卸货均等待车辆 ActionState 等于 FINISHED 后才转移软件货物并进入下一状态，保留现有货物身份、站点和归属校验。实机模式没有延时成功兜底。VDA对接层必须在新动作开始时更新或复位 ActionState，避免沿用上一动作的 FINISHED。该开关不改变HTTP API入参或返回结构。
+
+取货来源身份和批次校验、卸货前车载货物归属校验统一在下发 pick/drop 动作前执行。动作完成后不再要求源货位有货或货物仍在车上，只同步软件货物归属，并检查转移后的归属。这些校验检查软件记录，不代表实物检测；当前仍由脚本调用 MoveToOtherArea 同步归属，VDA不应重复转移软件货物。

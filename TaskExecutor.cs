@@ -43,8 +43,7 @@ namespace ProfControl
                         {
                             // 已到达本段任务的取货巷道入口，释放上一段任务交接过来的卸货巷道锁。
                             RecyclePendingDropLock(info);
-                            if (ValidateExpectedCargo(info) && ValidateBatchPickStation(info))
-                                MoveStage(info, info.FromMark, "pick", TaskStatus.GoPick);
+                            MoveStage(info, info.FromMark, "pick", TaskStatus.GoPick);
                         }
                         break;
 
@@ -57,7 +56,7 @@ namespace ProfControl
                         break;
 
                     case TaskStatus.Picking:
-                        if (PickDropActionFinished(info) && ValidateExpectedCargo(info) && ValidateBatchPickStation(info))
+                        if (PickDropActionFinished(info))
                         {
                             var fromStation = API.GetStation(info.FromMark);
                             var pickArea = GetStationCargoArea(fromStation, out var pickAreaError);
@@ -106,7 +105,6 @@ namespace ProfControl
                     case TaskStatus.Dropping:
                         if (PickDropActionFinished(info))
                         {
-                            if (!ValidateCargoOwner(info, info.WorkAgv)) break;
                             var toStation = API.GetStation(info.ToMark);
                             var dropArea = GetStationCargoArea(toStation, out var dropAreaError);
                             if (dropArea == null)
@@ -468,6 +466,9 @@ namespace ProfControl
 
         void MoveStage(TaskInfo info, string mark, string action, TaskStatus status)
         {
+            // 下发动作前检查软件记录；动作完成后只同步货物归属并核对同步结果。
+            if (action == "pick" && (!ValidateExpectedCargo(info) || !ValidateBatchPickStation(info))) return;
+            if (action == "drop" && !ValidateCargoOwner(info, info.WorkAgv)) return;
             info.WorkAgv.SetValue("staID", mark);
             info.WorkAgv.SetValue("staAction", action);
             MoveStage(info, mark, status);
