@@ -249,3 +249,7 @@ README 是文档，不加入 csproj 的 `Compile` 项；`project.config` 的 `Co
 
 现场需确认 `01`～`25` 分类及其站点配置，检查启动配置日志，验证不同朝向库位之间的取放货、目标区域中的货物显示朝向，以及朝向分类缺失或重复时保持等待的行为。地图配置缓存及朝向取放货尚未完成现场运行验证。
   
+
+## 仿真与实机取放货完成判断
+
+在 script.cs 中配置 SimulatePickDrop：默认 true，仿真使用 PickDropDelay（当前10秒）；实机运行前改为 false，取货和卸货均等待车辆 ActionState 等于 FINISHED 后才转移软件货物并进入下一状态，保留现有货物身份、站点和归属校验。实机模式没有延时成功兜底。VDA对接层必须在新动作开始时更新或复位 ActionState，避免沿用上一动作的 FINISHED。该开关不改变HTTP API入参或返回结构。

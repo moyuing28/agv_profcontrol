@@ -4,7 +4,9 @@ namespace ProfControl
     {
         #region 参数配置
         const int MaxParallelMoveTask = 4; // 允许前车卸货、后车取货重叠
-        const int PickDropDelay = 10;
+        // true：仿真按延时完成取放货；false：实机等待VDA动作完成反馈。
+        const bool SimulatePickDrop = true;
+        const int PickDropDelay = 10; // 仅仿真模式使用，单位：秒
 
         const string GarageArea = "车库位";
         readonly string[] GarageDirectionAreas =

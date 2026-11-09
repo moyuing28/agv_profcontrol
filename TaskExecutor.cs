@@ -57,7 +57,7 @@ namespace ProfControl
                         break;
 
                     case TaskStatus.Picking:
-                        if (StateTimeout(info) && ValidateExpectedCargo(info) && ValidateBatchPickStation(info))
+                        if (PickDropActionFinished(info) && ValidateExpectedCargo(info) && ValidateBatchPickStation(info))
                         {
                             var fromStation = API.GetStation(info.FromMark);
                             var pickArea = GetStationCargoArea(fromStation, out var pickAreaError);
@@ -104,7 +104,7 @@ namespace ProfControl
                         break;
 
                     case TaskStatus.Dropping:
-                        if (StateTimeout(info))
+                        if (PickDropActionFinished(info))
                         {
                             if (!ValidateCargoOwner(info, info.WorkAgv)) break;
                             var toStation = API.GetStation(info.ToMark);
@@ -307,6 +307,13 @@ namespace ProfControl
                    info.WorkAgv.API.On == mark;
         }
 
+        // 实机只认动作完成反馈，不以延时兜底；新动作的反馈复位由VDA对接层负责。
+        bool PickDropActionFinished(TaskInfo info)
+        {
+            if (info.WorkAgv == null) return false;
+            if (SimulatePickDrop) return StateTimeout(info);
+            return info.WorkAgv.GetValue<string>("ActionState") == "FINISHED";
+        }
         bool StateTimeout(TaskInfo info)
         {
             return (DateTime.Now - info.StateTime).TotalSeconds >= PickDropDelay;
