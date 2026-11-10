@@ -77,7 +77,7 @@ else
 
 ## 点到点接口改造：第一阶段（2026-11-10）
 
-当前点到点接单接口已改为 `CreateCargoMoveTask(IEnumerable<CargoMoveRequest> tasks)`，单件传一条，多件传多条。原四参数签名已移除；`CreateStationMoveTask` 转入列表接口。下文涉及旧四参数调用、接单立即规划清障的说明属于旧实现，以本节为准。
+当前点到点接单接口已改为 `CreateCargoMoveTask(IEnumerable<CargoMoveRequest> tasks)`，单件传一条，多件传多条。原四参数签名、公开的 `CreateStationMoveTask` 和 `/api/createStationMoveTask` 路由均已移除，不保留兼容入口；脚本接单统一使用货物列表接口。下文涉及旧四参数调用、接单立即规划清障的说明属于旧实现，以本节为准。
 
 本阶段只校验和登记，不生成执行步骤、不预约资源、不派车。查询状态为 Waiting，原因是“已登记，等待点到点动态调度接入”。因此目前点到点搬运暂不能执行，后续阶段接入动态调度。整巷批次和车辆执行状态机未修改。
 
@@ -314,7 +314,7 @@ None / 业务调度派车
 - `GetCargoTags(cargoName)`：按 `CargoInfo.Name` 精确筛选当前实体货物，返回非空、去重并按字符串顺序排序的 `List<string>` Tag 列表，可直接用于编号下拉框。示例：`var tags = GetCargoTags("迈巴赫");`，返回类似 `["000001", "000002"]`；参数为空或无匹配时返回空列表。包含站点及 AGV 上的货物，列表不代表当前可搬运，也不能用去重后的列表检测重复编号；创建搬运时仍核验类型与 Tag 的唯一性。
 - `CreateCargoMoveTask(cargoName, cargoTag, toMark, agvName = "00")`：按 `CargoInfo.Name` 与实体 `Cargo.Tag` 精确定位货物，自动取得源站点，再复用点到点搬运及两端清障。示例：`var result = CreateCargoMoveTask("迈巴赫", "000001", "41");`；检查 `result.Success`、`result.Error`，返回值还包含类型、Tag、实际起点和目标站点。成功表示任务已创建，不代表搬运完成。
 - 不同类型可使用相同 Tag，同一类型与 Tag 必须唯一。新入口要求源站点仅有一件数量为 1 的指定货物；无匹配、重复匹配、货物不在站点、已有未完成任务时拒绝创建。目标必须满足现有点到点货位、巷道及清障要求；`"00"` 自动选车，其他值指定 AGV 名称。
-- 所有搬运步骤（含障碍货物）记录 `CargoName/CargoTag` 并核验身份；障碍货物同样必须满足单件、非空且唯一的身份要求。货物被替换或位置不符时进入 `NeedsReview` 并保留资源等待核对。原 `CreateStationMoveTask()` 保留站点参数，但内部按该站点货物调用新入口，也创建统一业务批次。
+- 所有搬运步骤（含障碍货物）记录 `CargoName/CargoTag` 并核验身份；障碍货物同样必须满足单件、非空且唯一的身份要求。货物被替换或位置不符时进入 `NeedsReview` 并保留资源等待核对。旧站点搬运公开入口及HTTP路由已删除，不再支持按起点站号接单。
 - `GetBatches()`：业务批次进度独立快照，最新在前。
 - `GetBatchDetail(batchId)`：返回独立快照，不存在返回 null。`Items` 包含货物类型、编号、来源、请求目标站点/巷道、实际卸货位 `AssignedDropMark`、状态及等待原因；`Steps` 包含所有已规划步骤（包括尚未激活的清障步骤），并提供 `TotalStepCount`、`CompletedStepCount`。巷道明细等待派车时步骤列表为空，派车后加入搬运步骤，具体卸货位确定前可为空。查询不会派车或推进状态。
 - 一条货物明细下所有步骤均达到 `Finished` 才计为完成：每步卸货完成后成功续接任务，或回家停车完成。不是仅卸货完成；清障步骤完成不代表目标货物已完成。

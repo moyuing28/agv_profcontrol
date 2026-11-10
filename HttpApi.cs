@@ -399,39 +399,6 @@ namespace ProfControl
                     }
                     return Results.Text(arr.ToString(), API.ContentTypeJson);
                 });
-                //创建移库任务
-                app.MapPost("/api/createStationMoveTask", async (HttpContext context) =>
-                {
-                	JObject jobj = null;
-                    try { jobj = await context.AsJObject(); }
-                    catch { }
-
-                    string fromMark = jobj?["fromMark"]?.ToString();
-                    string toMark = jobj?["toMark"]?.ToString();
-                    string agvName = jobj?["agvName"]?.ToString();
-             
-                	if (string.IsNullOrWhiteSpace(fromMark) || string.IsNullOrWhiteSpace(toMark))
-                    {
-                        context.Response.StatusCode = 400;
-                        return Results.Text(
-                            new JObject { ["message"] = "起始站点和目标站点均不能为空" }.ToString(),
-                            API.ContentTypeJson);
-                    }
-
-                    Tools.trace($"createStationMoveTask: 收到创建移库任务请求 {fromMark} -> {toMark}");
-
-                    bool ok = CreateStationMoveTask(fromMark, toMark, string.IsNullOrWhiteSpace(agvName)?"00":agvName); // "00"=自动分配，写死AGV名则找不到该AGV会失败
-                    if (!ok)
-                    {
-                        context.Response.StatusCode = 400;
-                        return Results.Text(
-                            new JObject { ["message"] = "任务创建失败（站点不存在/巷道锁定等），详见运行日志" }.ToString(),
-                            API.ContentTypeJson);
-                    }
-                   
-                    return Results.Text("创建移库任务成功！");
-                });
-                
                 //创建移动任务
                 app.MapPost("/api/createMoveTask", async (HttpContext context) =>
                 {

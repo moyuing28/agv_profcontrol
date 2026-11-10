@@ -180,24 +180,6 @@ namespace ProfControl
             return true;
         }
 
-        public bool CreateStationMoveTask(string targetMark, string toMark, string agvName = "00")
-        {
-            lock (cargoBatchSync)
-            {
-                if (HasOpenCargoBatch())
-                {
-                    Tools.trace("[点到点搬运] 当前搬运批次尚未结束");
-                    return false;
-                }
-                if (!TryGetStationCargo(targetMark, out var cargo, out var error))
-                {
-                    Tools.trace($"[点到点搬运] {error}");
-                    return false;
-                }
-                return CreateCargoMoveTask(new[] { new CargoMoveRequest { TaskNo = Guid.NewGuid().ToString(), CargoName = cargo.Info.Name, CargoTag = Convert.ToString(cargo.Tag), ToMark = toMark, AgvName = agvName } }).Success;
-            }
-        }
-
         bool CreateStationMoveTaskCore(string targetMark, string toMark, string agvName,
             string cargoName = null, string cargoTag = null)
         {

@@ -110,7 +110,6 @@ namespace ProfControl
 
             // ===== 留给后续 API 接入的内部函数示例，请保留注释 =====
             // CreateMoveTask("53", "20"); // 空车移动：目标站点 Mark、车辆名称；"00" 自动选车。
-            // CreateStationMoveTask("72", "41", "00"); // 点到点搬运：起点 Mark、终点 Mark、车辆名称。
             // var cargoTags = GetCargoTags("迈巴赫"); // 按货物类型查询编号下拉列表，返回 List<string>，例如 "000001"、"000002"；无匹配时为空列表。
             // var mercedesTags = GetCargoTags("梅赛德斯"); // 换一个类型，只返回该类型的非空、去重、排序后的 Tag；包含站点和 AGV 上的货物。
             // var addResult = AddCargo("迈巴赫", "000013", "目标空货位Mark"); // 在对应朝向区域添加一件货物；类型需预先配置，类型 + Tag 不得重复。
@@ -118,18 +117,31 @@ namespace ProfControl
             // var deleteResult = DeleteCargo("梅赛德斯", "000008"); // 删除指定实体货物，不清空整站或删除托盘。
             // addResult/editResult/deleteResult 的 Success、Error 表示操作结果；CargoName、CargoTag、StationMark 返回货物信息。
             // 货物编辑要求当前没有未完成任务/批次/巷道锁，修改和删除只允许站点内唯一的一件货物；拒绝编辑 AGV 上的货物。
-            // var cargoResult = CreateCargoMoveTask("迈巴赫", "000001", "目标空货位Mark"); // 类型 + Tag 自动定位起点。
-            // cargoResult.Success / cargoResult.Error：任务创建结果和失败原因；选择 cargoTags 中的编号作为上述第二个参数，能否搬运由创建函数检查。
-            // cargoResult.BatchId / cargoResult.ItemId：单件搬运也返回统一批次和明细编号，通过 GetBatchDetail(cargoResult.BatchId) 查询。
-            // detail.Items：目标货物类型、Tag、目标货位/巷道和实际卸货位；每项 Steps 包含清障、暂存及目标搬运的全部步骤。
+            // var cargoResult = CreateCargoMoveTask(new[]
+            // {
+            //     new CargoMoveRequest { TaskNo = "T001", CargoName = "迈巴赫", CargoTag = "000001", ToMark = "目标货位Mark1", Priority = 0 },
+            //     new CargoMoveRequest { TaskNo = "T002", CargoName = "迈巴赫", CargoTag = "000002", ToMark = "目标货位Mark2", Priority = 1 }
+            // }); // 单件传一条，多件传多条；按类型 + Tag 查询实时起点，CargoTag 可选自 cargoTags。
+            // CargoMoveRequest.AgvName 默认 "00" 自动选车；Priority 越小越优先，同值按提交顺序。
+            // ReleaseTime 不填表示立即释放；PredecessorTaskNos 默认空，当前业务无需填写；目标巷道深浅前置自动建立。
+            // cargoResult.Success / cargoResult.Error：整批接收结果和失败原因；成功只表示已登记，最近一轮主调度再派车。
+            // cargoResult.BatchId：批次编号；cargoResult.Tasks 每条返回 TaskNo、ItemId，不再有顶层 ItemId；整批校验失败不登记。
+            // var candidatePreview = GetPointToPointCandidates(cargoResult.BatchId); // 仅在接收成功后查询；只读，不派车、不预约、不执行 FINALIZE。
+            // candidatePreview.Success / Error：查询结果；Candidates 是已排序去重的当前一步动作，Tasks 提供 CandidateCount、WaitReason、Notes。
+            // Candidates 每条包含 TaskNo、ActionType（CUSTOMER_MOVE / RELOCATION / FILLING / FINALIZE）、货物、实时 FromMark/ToMark、LoadedDistance、Reason。
+            // var cargoDetail = GetBatchDetail(cargoResult.BatchId); // 查询实际业务及执行进度；Items[].Steps 是已派搬运历史，不是候选清单。
+            // 点到点明细 CompletedTime / CompletionAction 表示客户完成时间及方式；步骤 PointAction / PointDropCompleted / DropoffCompletedTime 表示搬运类型及放货反馈。
+            // 批次 CustomerCompletedTime 是最后一个客户完成时间；批次 CompletedTime 要等已派任务、车辆及货物巷道锁收尾后才填写。
+            // FINALIZE 不生成车辆搬运步骤；临时到达最终目标不自动完成客户任务，仍需独立确认。
             // var result = CreatePocketMoveBatch(new[] { "01" }, new[] { "03" }); // 巷道搬运：来源、目标子分类名称；不要传站点号。
-            // var multiResult = CreatePocketMoveBatch(new[] { "01", "02", "03" }, new[] { "06", "07" }); // 不定长列表；目标按顺序填充。
+            // var multiResult = CreatePocketMoveBatch(new[] { "01", "02", "03" }, new[] { "06", "07" }); // 不定长列表；目标按现有分组和轮转规则动态分配。
             // result.RequiredCount / result.TargetCapacities：待搬数量及各目标可进入空位、预留、剩余容量。
             // result.Success / result.Error / result.Batch.BatchId：创建结果、失败原因、成功后的批次编号。
             // var batches = GetBatches(); // 所有批次的进度快照。
             // var detail = GetBatchDetail("填写创建成功返回的批次编号"); // 全部明细；找不到时为 null。
             // var pickStations = GetSelectableStations(true); // 有货的取货站点。
-            // var dropStationsForApi = GetSelectableStations(false); // 可选卸货站点。
+            // var dropStationsForApi = GetSelectableStations(false); // 当前空货位列表，不代表能立即派车；点到点最终目标允许被占用，由调度清障。
+            // 两种搬运模式暂不混跑，也不向未结束点到点批次追加任务。预约、锁、派车和反馈函数属于内部调度，不作为 API 接单入口。
 
             // ===== 当前测试：切换时直接注释调用，不使用开关变量 =====
             var testCargoTags = GetCargoTags("迈巴赫");
