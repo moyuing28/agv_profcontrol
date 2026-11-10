@@ -79,8 +79,42 @@ namespace ProfControl
 
         // 每件货一条业务明细；等待时不创建执行任务，也不要求已分配卸货位。
         // 只存稳定标识，不存 IAgv / IStation 等现场对象，便于后续持久化。
+        public class CargoMoveRequest
+        {
+            public string TaskNo { get; set; }
+            public string CargoName { get; set; }
+            public string CargoTag { get; set; }
+            public string ToMark { get; set; }
+            public string AgvName { get; set; } = "00";
+            // 数值越小越优先；相同优先级按提交顺序。
+            public int Priority { get; set; }
+            public DateTime? ReleaseTime { get; set; }
+            public List<string> PredecessorTaskNos { get; set; } = new List<string>();
+        }
+
+        public class PointToPointCreateResult
+        {
+            public bool Success { get; set; }
+            public string Error { get; set; }
+            public string BatchId { get; set; }
+            public List<PointToPointTaskReceipt> Tasks { get; set; } = new List<PointToPointTaskReceipt>();
+        }
+
+        public class PointToPointTaskReceipt
+        {
+            public string TaskNo { get; set; }
+            public string ItemId { get; set; }
+        }
+
         public class CargoMoveItem
         {
+            public string TaskNo { get; set; }
+            public int Priority { get; set; }
+            public int SubmissionOrder { get; set; }
+            public DateTime? ReleaseTime { get; set; }
+            public string RequestedAgv { get; set; } = "00";
+            public List<string> PredecessorTaskNos { get; set; } = new List<string>();
+            public List<string> HardPredecessorTaskNos { get; set; } = new List<string>();
             public string ItemId { get; set; } = Guid.NewGuid().ToString();
             public string BatchId { get; set; }
             public string CargoName { get; set; }

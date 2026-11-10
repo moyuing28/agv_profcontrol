@@ -38,9 +38,16 @@ namespace ProfControl
                 if (batch == null) return null;
                 var detail = new CargoBatchDetail();
                 CopyBatchSummary(batch, detail);
-                detail.Items = batch.Items.OrderBy(i => i.SourcePocketKey).ThenBy(i => i.PickSequence)
+                var orderedItems = batch.MoveType == CargoMoveType.PointToPoint
+                    ? batch.Items.OrderBy(i => i.SubmissionOrder)
+                    : batch.Items.OrderBy(i => i.SourcePocketKey).ThenBy(i => i.PickSequence);
+                detail.Items = orderedItems
                     .Select(i => new CargoItemDetail
                     {
+                        TaskNo = i.TaskNo, Priority = i.Priority, SubmissionOrder = i.SubmissionOrder,
+                        ReleaseTime = i.ReleaseTime, RequestedAgv = i.RequestedAgv,
+                        PredecessorTaskNos = i.PredecessorTaskNos.ToList(),
+                        HardPredecessorTaskNos = i.HardPredecessorTaskNos.ToList(),
                         ItemId = i.ItemId,
                         BatchId = i.BatchId,
                         CargoName = i.CargoName,
@@ -588,4 +595,4 @@ namespace ProfControl
         }
     }
 }
-    
+

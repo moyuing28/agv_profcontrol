@@ -1,3 +1,32 @@
+## 点到点接口改造：第一阶段（2026-11-10）
+
+当前点到点接单接口已改为 `CreateCargoMoveTask(IEnumerable<CargoMoveRequest> tasks)`，单件传一条，多件传多条。原四参数签名已移除；`CreateStationMoveTask` 转入列表接口。下文涉及旧四参数调用、接单立即规划清障的说明属于旧实现，以本节为准。
+
+本阶段只校验和登记，不生成执行步骤、不预约资源、不派车。查询状态为 Waiting，原因是“已登记，等待点到点动态调度接入”。因此目前点到点搬运暂不能执行，后续阶段接入动态调度。整巷批次和车辆执行状态机未修改。
+
+请求字段：TaskNo、CargoName、CargoTag、ToMark、AgvName（默认 00 自动选车）、Priority（越小越优先，同值按提交顺序）、ReleaseTime（空表示立即释放，现场本地时间）、PredecessorTaskNos。前置编号仅引用本次提交的任务。最终目标可以已有货物，货物已在最终目标也允许登记。
+
+整批校验包括：必填字段、重复任务号/货物/目标、货物唯一且数量为 1 并位于有效货位、源目标地图及朝向配置、指定车辆、业务前置及目标巷道从深到浅前置的联合循环检查。全部通过后一次登记；失败不产生批次、执行任务、锁或预约。
+
+返回 PointToPointCreateResult：Success、Error、BatchId、Tasks（TaskNo/ItemId）。使用 GetBatchDetail(BatchId) 查询各条任务；PredecessorTaskNos 为业务前置，HardPredecessorTaskNos 包含自动生成的目标巷道前置，列表均为独立快照。
+
+当前一次接收一组任务，不支持向未完成组追加任务，也不支持与整巷批次或其他执行任务混跑。SourceMark 仅是接单时位置快照，后续动态调度必须重新查询货物实时位置。
+
+```csharp
+var result = CreateCargoMoveTask(new[]
+{
+    new CargoMoveRequest
+    {
+        TaskNo = "T001", CargoName = "迈巴赫", CargoTag = "000001",
+        ToMark = "85", Priority = 1
+    }
+});
+if (result.Success)
+    Tools.trace($"已登记批次：{result.BatchId}");
+else
+    Tools.trace(result.Error);
+```
+
 # SampleProject 项目说明
 
 本文介绍当前项目的功能、配置、运行流程和限制，供维护者和 AI 理解源码。修改功能后同步更新本文；变更记录放在 Git 提交中。实际行为以源码及现场验证为准，不要把规划功能当作已实现功能。

@@ -55,73 +55,6 @@ namespace ProfControl
             return true;
         }
 
-        public CargoMoveCreateResult CreateCargoMoveTask(string cargoName, string cargoTag,
-            string toMark, string agvName = "00")
-        {
-            lock (cargoBatchSync)
-            {
-                var result = new CargoMoveCreateResult
-                {
-                    CargoName = cargoName, CargoTag = cargoTag, ToMark = toMark
-                };
-                if (string.IsNullOrWhiteSpace(cargoName) || string.IsNullOrWhiteSpace(cargoTag) ||
-                    string.IsNullOrWhiteSpace(toMark))
-                    result.Error = "货物类型、Tag 和目标站点不能为空";
-                else if (HasOpenCargoBatch() || TaskInfos.Any(t => t.Status != TaskStatus.Finished) ||
-                    PendingClearanceBatches.Count > 0)
-                    result.Error = "当前已有未完成任务或搬运批次";
-                else
-                {
-                    var matches = API.Cargos.Where(c => c.Info?.Name == cargoName &&
-                        Convert.ToString(c.Tag) == cargoTag).ToList();
-                    if (matches.Count != 1)
-                        result.Error = matches.Count == 0 ? "未找到指定货物" : "货物类型与 Tag 匹配到多件货物";
-                    else if (!(API.GetOwner(matches[0]) is IStation station))
-                        result.Error = "货物当前不在站点，可能已在 AGV 上";
-                    else
-                    {
-                        result.FromMark = station.Mark;
-                        if (!IsExpectedCargoAtStation(station.Mark, cargoName, cargoTag))
-                            result.Error = "源站点必须仅有一件数量为 1 的指定货物";
-                        else if (CreateStationMoveTaskCore(station.Mark, toMark, agvName, cargoName, cargoTag))
-                        {
-                            var steps = TaskInfos.Where(t => t.Status != TaskStatus.Finished)
-                                .Concat(PendingClearanceBatches.Values.SelectMany(q => q)).ToList();
-                            var batch = new CargoMoveBatch
-                            {
-                                MoveType = CargoMoveType.PointToPoint,
-                                SourceScopeId = station.Mark, TargetScopeId = toMark,
-                                Status = CargoBatchStatus.Running
-                            };
-                            var item = new CargoMoveItem
-                            {
-                                BatchId = batch.BatchId, CargoName = cargoName, CargoTag = cargoTag,
-                                SourceMark = station.Mark, SourcePocketKey = GetStationPocketKey(station.Mark),
-                                TargetMark = toMark, PickSequence = 1, Status = CargoTaskStatus.Executing,
-                                ExecutionSteps = steps,
-                                ExecutionTaskId = steps.Last().TaskId
-                            };
-                            foreach (var step in steps)
-                            {
-                                step.CargoBatchId = batch.BatchId;
-                                step.CargoItemId = item.ItemId;
-                            }
-                            batch.Items.Add(item);
-                            cargoMoveBatches.Add(batch);
-                            result.BatchId = batch.BatchId;
-                            result.ItemId = item.ItemId;
-                            result.Success = true;
-                            SyncCargoBatchProgress();
-                        }
-                        else
-                            result.Error = "搬运创建失败，请检查目标货位、巷道配置、指定车辆和清障空间；详情见终端日志";
-                    }
-                }
-                Tools.trace($"[按货物搬运] 类型={cargoName}, Tag={cargoTag}, {result.FromMark} -> {toMark}, 成功={result.Success}, 原因={result.Error}");
-                return result;
-            }
-        }
-
         void TestCargoMoveCreation()
         {
             var destination = GetSelectableStations(false).FirstOrDefault();
@@ -130,8 +63,8 @@ namespace ProfControl
                 Tools.trace("[单件搬运测试] 没有空货位");
                 return;
             }
-            var result = CreateCargoMoveTask("迈巴赫", "000002", destination.StationMark);
-            Tools.trace($"[单件搬运测试] {result.CargoName}/{result.CargoTag}：{result.FromMark} -> {result.ToMark}｜批次={result.BatchId}｜明细={result.ItemId}｜成功={result.Success}｜原因={result.Error}");
+            var result = CreateCargoMoveTask(new[] { new CargoMoveRequest { TaskNo = Guid.NewGuid().ToString(), CargoName = "迈巴赫", CargoTag = "000002", ToMark = destination.StationMark } });
+            Tools.trace($"[单件搬运测试] 批次={result.BatchId}｜成功={result.Success}｜原因={result.Error}");
         }
 
         bool TryGetStationCargo(string mark, out ICargo cargo, out string error)
@@ -261,7 +194,7 @@ namespace ProfControl
                     Tools.trace($"[点到点搬运] {error}");
                     return false;
                 }
-                return CreateCargoMoveTask(cargo.Info.Name, Convert.ToString(cargo.Tag), toMark, agvName).Success;
+                return CreateCargoMoveTask(new[] { new CargoMoveRequest { TaskNo = Guid.NewGuid().ToString(), CargoName = cargo.Info.Name, CargoTag = Convert.ToString(cargo.Tag), ToMark = toMark, AgvName = agvName } }).Success;
             }
         }
 
