@@ -56,7 +56,7 @@ namespace ProfControl
                         break;
 
                     case TaskStatus.Picking:
-                        if (PickDropActionFinished(info))
+                        if (StationActionFinished(info))
                         {
                             var fromStation = API.GetStation(info.FromMark);
                             var pickArea = GetStationCargoArea(fromStation, out var pickAreaError);
@@ -85,12 +85,12 @@ namespace ProfControl
                         if (Arrived(info, info.PickEntranceMark))
                         {
                             ReleaseLock(info, true);
-                            MoveStage(info, info.DropEntranceMark, TaskStatus.GoDropEntrance);
+                            MoveStage(info, info.DropEntranceMark, "detectObject", TaskStatus.GoDropEntrance);
                         }
                         break;
 
                     case TaskStatus.GoDropEntrance:
-                        if (Arrived(info, info.DropEntranceMark) && DropReady(info))
+                        if (Arrived(info, info.DropEntranceMark) && StationActionFinished(info) && DropReady(info))
                             MoveStage(info, info.ToMark, "drop", TaskStatus.GoDrop);
                         break;
 
@@ -103,7 +103,7 @@ namespace ProfControl
                         break;
 
                     case TaskStatus.Dropping:
-                        if (PickDropActionFinished(info))
+                        if (StationActionFinished(info))
                         {
                             var toStation = API.GetStation(info.ToMark);
                             var dropArea = GetStationCargoArea(toStation, out var dropAreaError);
@@ -306,10 +306,10 @@ namespace ProfControl
         }
 
         // 实机只认动作完成反馈，不以延时兜底；新动作的反馈复位由VDA对接层负责。
-        bool PickDropActionFinished(TaskInfo info)
+        bool StationActionFinished(TaskInfo info)
         {
             if (info.WorkAgv == null) return false;
-            if (SimulatePickDrop) return StateTimeout(info);
+            if (SimulateStationActions) return StateTimeout(info);
             return info.WorkAgv.GetValue<string>("ActionState") == "FINISHED";
         }
         bool StateTimeout(TaskInfo info)
