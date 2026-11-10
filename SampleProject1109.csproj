@@ -134,6 +134,7 @@
     <Compile Include="E:\www\wwwroot\ProfControlV8Update\script\SampleProject1109\ParkingDispatch.cs" />
     <Compile Include="E:\www\wwwroot\ProfControlV8Update\script\SampleProject1109\PointToPointScheduler.cs" />
     <Compile Include="E:\www\wwwroot\ProfControlV8Update\script\SampleProject1109\PointToPointDistance.cs" />
+    <Compile Include="E:\www\wwwroot\ProfControlV8Update\script\SampleProject1109\PointToPointDispatch.cs" />
     <Compile Include="E:\www\wwwroot\ProfControlV8Update\script\SampleProject1109\script.cs" />
     <Compile Include="E:\www\wwwroot\ProfControlV8Update\script\SampleProject1109\SimulationExport\DistanceExporter.cs" />
     <Compile Include="E:\www\wwwroot\ProfControlV8Update\script\SampleProject1109\SimulationExport\ExportModels.cs" />

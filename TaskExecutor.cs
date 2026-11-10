@@ -18,124 +18,136 @@ namespace ProfControl
             foreach (var info in TaskInfos
                 .Where(t => t.Status != TaskStatus.Finished).ToList())
             {
-                switch (info.Status)
+                try
                 {
-                    case TaskStatus.None:
-                        if (info.TaskType == TaskTypeEnum.移动任务)
-                        {
-                            AssignMoveAgv(info);
-                        }
-                        else
-                        {
-                            AssignAgv(info);
-                        }
-                        break;
-
-                    case TaskStatus.GoMove:
-                        if (Arrived(info, info.ToMark))
-                        {
-                            info.Status = TaskStatus.Finished;
-                        }
-                        break;
-
-                    case TaskStatus.GoPickEntrance:
-                        if (Arrived(info, info.PickEntranceMark))
-                        {
-                            // 已到达本段任务的取货巷道入口，释放上一段任务交接过来的卸货巷道锁。
-                            RecyclePendingDropLock(info);
-                            MoveStage(info, info.FromMark, "pick", TaskStatus.GoPick);
-                        }
-                        break;
-
-                    case TaskStatus.GoPick:
-                        if (Arrived(info, info.FromMark))
-                        {
-                            info.Status = TaskStatus.Picking;
-                            info.StateTime = DateTime.Now;
-                        }
-                        break;
-
-                    case TaskStatus.Picking:
-                        if (StationActionFinished(info))
-                        {
-                            var fromStation = API.GetStation(info.FromMark);
-                            var pickArea = GetStationCargoArea(fromStation, out var pickAreaError);
-                            if (pickArea == null)
+                    switch (info.Status)
+                    {
+                        case TaskStatus.None:
+                            if (info.TaskType == TaskTypeEnum.移动任务)
                             {
-                                WaitReason(info, $"取货位 {info.FromMark}：{pickAreaError}");
-                                break;
+                                AssignMoveAgv(info);
                             }
-                            fromStation.MoveToOtherArea(pickArea, info.WorkAgv, "车");
-                            if (!ValidateCargoOwner(info, info.WorkAgv)) break;
-                            info.Status = TaskStatus.Picked;
-                            Tools.trace($"[取货完成] AGV={info.WorkAgv.Name}, 取货位={info.FromMark}, 等待申请卸货巷道={info.DropPocketKey}");
-                        }
-                        break;
-
-                    case TaskStatus.Picked:
-                        // 下游未落实时保留取货锁，停在取货位。
-                        if (!Arrived(info, info.FromMark) || !DropReady(info)) break;
-                        if (info.SamePocket)
-                            MoveStage(info, info.ToMark, "drop", TaskStatus.GoDrop);
-                        else
-                            MoveStage(info, info.PickEntranceMark, TaskStatus.GoPickExit);
-                        break;
-
-                    case TaskStatus.GoPickExit:
-                        if (Arrived(info, info.PickEntranceMark))
-                        {
-                            ReleaseLock(info, true);
-                            MoveStage(info, info.DropEntranceMark, "detectObject", TaskStatus.GoDropEntrance);
-                        }
-                        break;
-
-                    case TaskStatus.GoDropEntrance:
-                        if (Arrived(info, info.DropEntranceMark) && StationActionFinished(info) && DropReady(info))
-                            MoveStage(info, info.ToMark, "drop", TaskStatus.GoDrop);
-                        break;
-
-                    case TaskStatus.GoDrop:
-                        if (Arrived(info, info.ToMark))
-                        {
-                            info.Status = TaskStatus.Dropping;
-                            info.StateTime = DateTime.Now;
-                        }
-                        break;
-
-                    case TaskStatus.Dropping:
-                        if (StationActionFinished(info))
-                        {
-                            var toStation = API.GetStation(info.ToMark);
-                            var dropArea = GetStationCargoArea(toStation, out var dropAreaError);
-                            if (dropArea == null)
+                            else
                             {
-                                WaitReason(info, $"卸货位 {info.ToMark}：{dropAreaError}");
-                                break;
+                                AssignAgv(info);
                             }
-                            info.WorkAgv.MoveToOtherArea("车", toStation, dropArea);
-                            if (!ValidateCargoOwner(info, toStation)) break;
-                            info.Status = TaskStatus.Dropped;
-                            info.DropCapacityReserved = false;
+                            break;
+
+                        case TaskStatus.GoMove:
+                            if (Arrived(info, info.ToMark))
+                            {
+                                info.Status = TaskStatus.Finished;
+                            }
+                            break;
+
+                        case TaskStatus.GoPickEntrance:
+                            if (Arrived(info, info.PickEntranceMark))
+                            {
+                                // 已到达本段任务的取货巷道入口，释放上一段任务交接过来的卸货巷道锁。
+                                RecyclePendingDropLock(info);
+                                MoveStage(info, info.FromMark, "pick", TaskStatus.GoPick);
+                            }
+                            break;
+
+                        case TaskStatus.GoPick:
+                            if (Arrived(info, info.FromMark))
+                            {
+                                info.Status = TaskStatus.Picking;
+                                info.StateTime = DateTime.Now;
+                            }
+                            break;
+
+                        case TaskStatus.Picking:
+                            if (StationActionFinished(info))
+                            {
+                                if (!CheckPointPickup(info)) break;
+                                var fromStation = API.GetStation(info.FromMark);
+                                var pickArea = GetStationCargoArea(fromStation, out var pickAreaError);
+                                if (pickArea == null)
+                                {
+                                    WaitReason(info, $"取货位 {info.FromMark}：{pickAreaError}");
+                                    break;
+                                }
+                                fromStation.MoveToOtherArea(pickArea, info.WorkAgv, "车");
+                                if (!ValidateCargoOwner(info, info.WorkAgv)) break;
+                                info.Status = TaskStatus.Picked;
+                                PointPickupCompleted(info);
+                                if (info.Status == TaskStatus.NeedsReview) break;
+                                Tools.trace($"[取货完成] AGV={info.WorkAgv.Name}, 取货位={info.FromMark}, 等待申请卸货巷道={info.DropPocketKey}");
+                            }
+                            break;
+
+                        case TaskStatus.Picked:
+                            // 下游未落实时保留取货锁，停在取货位。
+                            if (!Arrived(info, info.FromMark) || !DropReady(info)) break;
+                            if (info.SamePocket)
+                                MoveStage(info, info.ToMark, "drop", TaskStatus.GoDrop);
+                            else
+                                MoveStage(info, info.PickEntranceMark, TaskStatus.GoPickExit);
+                            break;
+
+                        case TaskStatus.GoPickExit:
+                            if (Arrived(info, info.PickEntranceMark))
+                            {
+                                ReleaseLock(info, true);
+                                MoveStage(info, info.DropEntranceMark, "detectObject", TaskStatus.GoDropEntrance);
+                            }
+                            break;
+
+                        case TaskStatus.GoDropEntrance:
+                            if (Arrived(info, info.DropEntranceMark) && StationActionFinished(info) && DropReady(info))
+                                MoveStage(info, info.ToMark, "drop", TaskStatus.GoDrop);
+                            break;
+
+                        case TaskStatus.GoDrop:
+                            if (Arrived(info, info.ToMark))
+                            {
+                                info.Status = TaskStatus.Dropping;
+                                info.StateTime = DateTime.Now;
+                            }
+                            break;
+
+                        case TaskStatus.Dropping:
+                            if (StationActionFinished(info))
+                            {
+                                if (!CheckPointDropoff(info, true)) break;
+                                var toStation = API.GetStation(info.ToMark);
+                                var dropArea = GetStationCargoArea(toStation, out var dropAreaError);
+                                if (dropArea == null)
+                                {
+                                    WaitReason(info, $"卸货位 {info.ToMark}：{dropAreaError}");
+                                    break;
+                                }
+                                info.WorkAgv.MoveToOtherArea("车", toStation, dropArea);
+                                if (!ValidateCargoOwner(info, toStation)) break;
+                                info.Status = TaskStatus.Dropped;
+                                PointDropoffCompleted(info);
+                                if (!info.PointAction.HasValue || info.PointDropCompleted) info.DropCapacityReserved = false;
 
 
-                        }
-                        break;
+                            }
+                            break;
 
-                    // 卸货完成后不再经过卸货巷道出口，直接续接下一件货物或回家。
-                    case TaskStatus.Dropped:
-                        ContinueOrPark(info);
-                        break;
+                        // 卸货完成后不再经过卸货巷道出口，直接续接下一件货物或回家。
+                        case TaskStatus.Dropped:
+                            ContinueOrPark(info);
+                            break;
 
-                    case TaskStatus.GoHome:
-                        if (!parkingTrips.ContainsKey(info.WorkAgv) && info.WorkAgv.IsFree() &&
-                            parkingLanes.Any(l => l.Slots.Contains(ParkingPosition(info.WorkAgv))))
-                            info.Status = TaskStatus.Finished;
-                        break;
+                        case TaskStatus.GoHome:
+                            if (!parkingTrips.ContainsKey(info.WorkAgv) && info.WorkAgv.IsFree() &&
+                                parkingLanes.Any(l => l.Slots.Contains(ParkingPosition(info.WorkAgv))))
+                                info.Status = TaskStatus.Finished;
+                            break;
 
-                    case TaskStatus.GoParkingExit:
-                        if (Arrived(info, info.ParkingExitMark))
-                            FinishParkingExit(info);
-                        break;
+                        case TaskStatus.GoParkingExit:
+                            if (Arrived(info, info.ParkingExitMark))
+                                FinishParkingExit(info);
+                            break;
+                    }
+                }
+                catch (Exception ex) when (info.PointAction.HasValue)
+                {
+                    ReviewPointExecution(info, "执行反馈或指令结果不确定，保留资源待核对：" + ex.Message);
                 }
                 UpdateAgvView(info);
             }
@@ -147,6 +159,7 @@ namespace ProfControl
             }
 
             SyncCargoBatchProgress();
+            DispatchPointToPoint();
             DispatchCargoBatch();
 
         }
@@ -173,6 +186,10 @@ namespace ProfControl
                     if (TaskInfos.Any(t => t != previous && t.WorkAgv == agv &&
                         t.Status != TaskStatus.Finished)) break;
                 }
+
+                if (!TaskInfos.Any(t => t != previous && t.WorkAgv == agv &&
+                    t.Status != TaskStatus.Finished))
+                    DispatchPointToPoint(agv);
 
                 if (!TaskInfos.Any(t => t != previous && t.WorkAgv == agv &&
                     t.Status != TaskStatus.Finished))
@@ -433,6 +450,7 @@ namespace ProfControl
 
         bool DropReady(TaskInfo info)
         {
+            if (!CheckPointDropoff(info, false)) return false;
             var key = info.DropPocketKey;
             if (string.IsNullOrEmpty(key) || !info.DropCapacityReserved) return false;
             if (PocketLocks.TryGetValue(key, out var owner) && !object.ReferenceEquals(owner, info))
@@ -467,6 +485,8 @@ namespace ProfControl
         void MoveStage(TaskInfo info, string mark, string action, TaskStatus status)
         {
             // 下发动作前检查软件记录；动作完成后只同步货物归属并核对同步结果。
+            if (action == "pick" && !CheckPointPickup(info)) return;
+            if (action == "drop" && !CheckPointDropoff(info, true)) return;
             if (action == "pick" && (!ValidateExpectedCargo(info) || !ValidateBatchPickStation(info))) return;
             if (action == "drop" && !ValidateCargoOwner(info, info.WorkAgv)) return;
             info.WorkAgv.SetValue("staID", mark);

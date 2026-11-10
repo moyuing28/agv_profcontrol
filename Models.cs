@@ -69,6 +69,7 @@ namespace ProfControl
             internal Dictionary<int, int> DropGroupRotation { get; set; } = new Dictionary<int, int>();
             public CargoBatchStatus Status { get; set; } = CargoBatchStatus.Waiting;
             public DateTime CreatedTime { get; set; } = DateTime.Now;
+            public DateTime? CustomerCompletedTime { get; set; }
             public DateTime? CompletedTime { get; set; }
             public List<CargoMoveItem> Items { get; set; } = new List<CargoMoveItem>();
 
@@ -180,6 +181,7 @@ namespace ProfControl
             public string AssignedAgv { get; set; }
             public TaskStatus? ExecutionStatus { get; set; }
             public DateTime? CompletedTime { get; set; }
+            public PointActionType? CompletionAction { get; set; }
         }
 
         public class CargoPocketCapacity
@@ -213,6 +215,7 @@ namespace ProfControl
             public CargoBatchStatus Status { get; set; }
             public string StatusText { get; set; }
             public DateTime CreatedTime { get; set; }
+            public DateTime? CustomerCompletedTime { get; set; }
             public DateTime? CompletedTime { get; set; }
             public int TotalCount { get; set; }
             public int WaitingCount { get; set; }
@@ -236,13 +239,16 @@ namespace ProfControl
             public string ExecutionStatusText { get; set; }
         }
 
-        public enum CargoStepType { Clearance, Staging, TargetMove }
+        public enum CargoStepType { Clearance, Staging, TargetMove, Filling }
 
         public class CargoStepDetail
         {
             public string TaskId { get; set; }
             public int Sequence { get; set; }
             public CargoStepType StepType { get; set; }
+            public PointActionType? PointAction { get; set; }
+            public bool PointDropCompleted { get; set; }
+            public DateTime? DropoffCompletedTime { get; set; }
             public string CargoName { get; set; }
             public string CargoTag { get; set; }
             public string FromMark { get; set; }
@@ -283,6 +289,9 @@ namespace ProfControl
             public string CargoName { get; set; }
             public string CargoTag { get; set; }
             public CargoStepType StepType { get; set; } = CargoStepType.TargetMove;
+            public PointActionType? PointAction { get; set; }
+            public bool PointDropCompleted { get; set; }
+            public DateTime? DropoffCompletedTime { get; set; }
             // 业务批次关联，与下方已有的清障步骤队列编号分开。
             public string CargoBatchId { get; set; }
             public string CargoItemId { get; set; }

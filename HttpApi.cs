@@ -345,6 +345,7 @@ namespace ProfControl
                             ["NeedsReviewCount"] = b.NeedsReviewCount,
                             ["CreatedTime"] = b.CreatedTime.ToString("yyyy-MM-dd HH:mm:ss"),
                             ["CompletedTime"] = b.CompletedTime?.ToString("yyyy-MM-dd HH:mm:ss"),
+                            ["CustomerCompletedTime"] = b.CustomerCompletedTime?.ToString("yyyy-MM-dd HH:mm:ss"),
                         });
                     }
                     return Results.Text(arr.ToString(), API.ContentTypeJson);

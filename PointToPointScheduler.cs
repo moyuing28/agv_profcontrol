@@ -56,7 +56,7 @@ namespace ProfControl
                         Priority = request.Priority, SubmissionOrder = batch.Items.Count,
                         ReleaseTime = request.ReleaseTime, RequestedAgv = agvName,
                         PredecessorTaskNos = predecessors.Distinct(StringComparer.Ordinal).ToList(),
-                        WaitReason = "已登记，等待点到点动态调度接入"
+                        WaitReason = "已登记，等待调度"
                     });
                 }
 
@@ -158,7 +158,7 @@ namespace ProfControl
                 preview.Notes.Add("批次或客户任务待现场核对");
                 return;
             }
-            if (item.Status == CargoTaskStatus.Executing || TaskInfos.Any(t => t.Status != TaskStatus.Finished &&
+            if (item.Status == CargoTaskStatus.Executing || TaskInfos.Any(t => PointMoveInProgress(t) &&
                 ((t.CargoBatchId == batch.BatchId && t.CargoItemId == item.ItemId) ||
                     (t.CargoName == item.CargoName && t.CargoTag == item.CargoTag))))
             {
@@ -287,7 +287,7 @@ namespace ProfControl
             out PointActionCandidate candidate, out string error)
         {
             candidate = null;
-            if (TaskInfos.Any(t => t.Status != TaskStatus.Finished && t.CargoName == cargoName && t.CargoTag == cargoTag))
+            if (TaskInfos.Any(t => PointMoveInProgress(t) && t.CargoName == cargoName && t.CargoTag == cargoTag))
             {
                 error = "候选货物已有执行动作，等待执行反馈";
                 return false;

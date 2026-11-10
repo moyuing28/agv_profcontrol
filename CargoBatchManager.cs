@@ -13,7 +13,7 @@ namespace ProfControl
 
         /// <summary>
         /// 返回所有内存批次的进度快照，最新创建的在前；无批次时返回空列表。
-        /// 仅查询，不派车、不推进状态。完成数包含车辆返回停车位。
+        /// 仅查询，不派车、不推进状态。点到点完成数是客户完成数，批次结束还需车辆收尾。
         /// </summary>
         public List<CargoBatchSummary> GetBatches()
         {
@@ -57,6 +57,8 @@ namespace ProfControl
                         Steps = i.ExecutionSteps.Select((s, index) => new CargoStepDetail
                         {
                             TaskId = s.TaskId, Sequence = index + 1, StepType = s.StepType,
+                            PointAction = s.PointAction, PointDropCompleted = s.PointDropCompleted,
+                            DropoffCompletedTime = s.DropoffCompletedTime,
                             CargoName = s.CargoName, CargoTag = s.CargoTag,
                             FromMark = s.FromMark, ToMark = s.ToMark, DropPocketKey = s.DropPocketKey,
                             AgvName = s.WorkAgv?.Name, Activated = TaskInfos.Any(t => t.TaskId == s.TaskId),
@@ -82,7 +84,8 @@ namespace ProfControl
                         AssignedAgv = i.AssignedAgv,
                         ExecutionStatus = i.ExecutionStatus,
                         ExecutionStatusText = i.ExecutionStatus.HasValue ? CargoStageText(i.ExecutionStatus.Value) : null,
-                        CompletedTime = i.CompletedTime
+                        CompletedTime = i.CompletedTime,
+                        CompletionAction = i.CompletionAction
                     }).ToList();
                 return detail;
             }
@@ -106,7 +109,11 @@ namespace ProfControl
                 CargoBatchStatus.NeedsReview => "待现场核对",
                 _ => "未知状态"
             };
+            if (batch.MoveType == CargoMoveType.PointToPoint && batch.CustomerCompletedTime.HasValue &&
+                batch.Status != CargoBatchStatus.Completed && batch.Status != CargoBatchStatus.NeedsReview)
+                snapshot.StatusText = "客户完成，车辆收尾中";
             snapshot.CreatedTime = batch.CreatedTime;
+            snapshot.CustomerCompletedTime = batch.CustomerCompletedTime;
             snapshot.CompletedTime = batch.CompletedTime;
             snapshot.TotalCount = batch.TotalCount;
             snapshot.WaitingCount = batch.Items.Count(i => i.Status == CargoTaskStatus.Waiting);
@@ -526,6 +533,11 @@ namespace ProfControl
         {
             foreach (var batch in cargoMoveBatches.Where(b => b.Status != CargoBatchStatus.Completed))
             {
+                if (batch.MoveType == CargoMoveType.PointToPoint)
+                {
+                    SyncPointBatchProgress(batch);
+                    continue;
+                }
                 foreach (var item in batch.Items.Where(i => !string.IsNullOrEmpty(i.ExecutionTaskId) && i.Status != CargoTaskStatus.Completed))
                 {
                     var finalStep = item.ExecutionSteps.LastOrDefault();
