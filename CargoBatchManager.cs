@@ -582,12 +582,12 @@ namespace ProfControl
             Tools.trace("[查询测试] 开始读取批次列表和详情");
             foreach (var batch in GetBatches())
             {
-                Tools.trace($"[列表查询] 批次 {batch.BatchId}，{batch.MoveType}：{batch.SourceScopeId} → {batch.TargetScopeId}｜{batch.StatusText}｜总数 {batch.TotalCount}，等待 {batch.WaitingCount}，执行中 {batch.ExecutingCount}，完成 {batch.CompletedCount}，待核对 {batch.NeedsReviewCount}");
+                Tools.trace($"[列表查询] 批次 {batch.BatchId}，{batch.MoveType}：{batch.SourceScopeId} → {batch.TargetScopeId}｜{batch.StatusText}｜总数 {batch.TotalCount}，等待 {batch.WaitingCount}，执行中 {batch.ExecutingCount}，完成 {batch.CompletedCount}，待核对 {batch.NeedsReviewCount}｜客户全部完成={batch.CustomerCompletedTime?.ToString("HH:mm:ss") ?? "未完成"}｜批次收尾完成={batch.CompletedTime?.ToString("HH:mm:ss") ?? "未完成"}");
                 var detail = GetBatchDetail(batch.BatchId);
                 if (detail == null) continue;
                 foreach (var item in detail.Items)
                 {
-                    Tools.trace($"[详情查询] 货物={item.CargoName}/{item.CargoTag}｜起点={item.SourceMark}｜目标货位={item.TargetMark ?? "未指定"}｜目标巷道={string.Join(",", item.TargetPocketNames)}｜实际卸货位={item.AssignedDropMark ?? "待分配"}｜{item.StatusText}｜步骤={item.CompletedStepCount}/{item.TotalStepCount}｜原因={item.WaitReason ?? "无"}");
+                    Tools.trace($"[详情查询] 货物={item.CargoName}/{item.CargoTag}｜起点={item.SourceMark}｜目标货位={item.TargetMark ?? "未指定"}｜目标巷道={string.Join(",", item.TargetPocketNames)}｜实际卸货位={item.AssignedDropMark ?? "待分配"}｜{item.StatusText}｜步骤={item.CompletedStepCount}/{item.TotalStepCount}｜完成方式={item.CompletionAction?.ToString() ?? "无"}｜客户完成={item.CompletedTime?.ToString("HH:mm:ss") ?? "未完成"}｜原因={item.WaitReason ?? "无"}");
                     foreach (var step in item.Steps)
                         Tools.trace($"[步骤查询] 第{step.Sequence}步 {step.StepType}｜货物={step.CargoName}/{step.CargoTag}｜{step.FromMark} -> {step.ToMark ?? "待分配"}｜AGV={step.AgvName ?? "待分配"}｜{step.StatusText}｜原因={step.WaitReason ?? "无"}");
                 }

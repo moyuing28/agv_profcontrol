@@ -57,14 +57,60 @@ namespace ProfControl
 
         void TestCargoMoveCreation()
         {
-            var destination = GetSelectableStations(false).FirstOrDefault();
-            if (destination == null)
+            lock (cargoBatchSync)
             {
-                Tools.trace("[单件搬运测试] 没有空货位");
-                return;
+                var reasons = new List<string>();
+                foreach (var pickPocket in cargoPockets.Values.OrderBy(p => p.Key, StringComparer.Ordinal))
+                {
+                    if (!TryGetPointPocketState(pickPocket.Key, out var pick, out var error))
+                    {
+                        reasons.Add(error);
+                        continue;
+                    }
+                    if (pick.OutermostMark == null || !TryGetStationCargo(pick.OutermostMark, out var cargo, out _)) continue;
+                    if (cargo.Info.Name != "迈巴赫") continue;
+                    var tag = Convert.ToString(cargo.Tag);
+                    foreach (var dropPocket in cargoPockets.Values.OrderBy(p => p.Key, StringComparer.Ordinal))
+                    {
+                        if (dropPocket.Key == pickPocket.Key ||
+                            !TryGetPointPocketState(dropPocket.Key, out var drop, out _) || drop.NextDropMark == null) continue;
+                        if (!CanPointCargoMove(cargo.Info.Name, tag, drop.NextDropMark, null, out var from, out error) ||
+                            !TryGetPointLoadedDistance(from, drop.NextDropMark, out var distance, out error))
+                        {
+                            reasons.Add(error);
+                            continue;
+                        }
+                        // 与实际执行阶段一致，避免选到直线可达但必经入口不可达的测试组合。
+                        if (!TryPointRouteDistance(new[] { from, pickPocket.Entrance, dropPocket.Entrance, drop.NextDropMark }, out _))
+                        {
+                            reasons.Add($"测试路线必经入口不可达：{from} -> {drop.NextDropMark}");
+                            continue;
+                        }
+                        Tools.trace($"[单件直搬测试] 货物={cargo.Info.Name}/{tag}，实时源位={from}，" +
+                            $"最终目标={drop.NextDropMark}，载货距离={distance}；源最外侧可取、目标为异巷道下一个合法空位。");
+                        var result = CreateCargoMoveTask(new[]
+                        {
+                            new CargoMoveRequest { TaskNo = "TEST001", CargoName = cargo.Info.Name, CargoTag = tag, ToMark = drop.NextDropMark }
+                        });
+                        if (!result.Success)
+                        {
+                            Tools.trace($"[单件直搬测试] 接单失败：{result.Error}");
+                            return;
+                        }
+                        Tools.trace($"[单件直搬测试] 已登记一条任务，批次={result.BatchId}，明细={result.Tasks[0].ItemId}；等待主调度派车。");
+                        var preview = GetPointToPointCandidates(result.BatchId);
+                        if (!preview.Success) Tools.trace($"[单件直搬测试] 候选查询失败：{preview.Error}");
+                        foreach (var candidate in preview.Candidates)
+                            Tools.trace($"[单件直搬初始候选] {candidate.ActionType}，{candidate.CargoName}/{candidate.CargoTag}，" +
+                                $"{candidate.FromMark} -> {candidate.ToMark}，{candidate.Reason}");
+                        foreach (var task in preview.Tasks.Where(t => t.CandidateCount == 0 && t.WaitReason != null))
+                            Tools.trace($"[单件直搬测试] 等待原因：{task.WaitReason}");
+                        return; // 本次启动只提交这一件，不能把后续可行组合一起接单。
+                    }
+                }
+                Tools.trace("[单件直搬测试] 没有找到可直接搬运的迈巴赫货物和异巷道合法目标，未创建任务。" +
+                    string.Join("；", reasons.Where(r => !string.IsNullOrEmpty(r)).Distinct().Take(5)));
             }
-            var result = CreateCargoMoveTask(new[] { new CargoMoveRequest { TaskNo = Guid.NewGuid().ToString(), CargoName = "迈巴赫", CargoTag = "000002", ToMark = destination.StationMark } });
-            Tools.trace($"[单件搬运测试] 批次={result.BatchId}｜成功={result.Success}｜原因={result.Error}");
         }
 
         bool TryGetStationCargo(string mark, out ICargo cargo, out string error)
