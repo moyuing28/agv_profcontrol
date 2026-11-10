@@ -140,6 +140,7 @@
     <Compile Include="E:\www\wwwroot\ProfControlV8Update\script\SampleProject1109\StationOptions.cs" />
     <Compile Include="E:\www\wwwroot\ProfControlV8Update\script\SampleProject1109\TaskCreator.cs" />
     <Compile Include="E:\www\wwwroot\ProfControlV8Update\script\SampleProject1109\PointToPointScheduler.cs" />
+    <Compile Include="E:\www\wwwroot\ProfControlV8Update\script\SampleProject1109\CargoResources.cs" />
     <Compile Include="E:\www\wwwroot\ProfControlV8Update\script\SampleProject1109\TaskExecutor.cs" />
   </ItemGroup>
 </Project>

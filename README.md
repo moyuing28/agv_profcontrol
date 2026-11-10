@@ -1,3 +1,18 @@
+## 点到点资源检查：第二阶段（2026-11-10）
+
+新增 `CargoResources.cs`，先供点到点动态调度使用，尚未接入派车。整巷模式、`PocketLocks`、原有容量预留和车辆执行状态机保持现状。点到点任务仍只登记等待。
+
+- `TryGetPointCargoSource`：按类型和编号查询实时源位置，拒绝重复身份、非单件货物和车载货物。客户明细中的 SourceMark 仅为接单快照。
+- `TryGetPointPocketState`：按 Slots 从深到浅检查 No-hole、单货位单货物和朝向配置，返回当前最外侧货位及下一个合法放货位。空巷道从最深位开始，满巷道无合法放货位；已有空洞只报告，不修复库存。
+- `CanPickPointCargo` / `CanPointCargoMove`：检查最外侧可取、已完成点到点客户货物保护、即时取放合法性及预约冲突；同巷道放货按假设取走后的占用计算。货物已到目标返回不需搬运，后续应走 FINALIZE。
+- `TryReservePointMove`：动作确定后按 TaskInfo 实例及 TaskId 一次性预约货物身份、源目标和两端外侧访问货位，失败无部分占用。相同对象、相同内容可在重新校验成功后重复申请；不同对象不能冒用相同 TaskId。
+- `ReleasePointSourceReservation`：调用方核实 Pickup 完成后释放源访问位，仍保留目标访问位和货物身份；`ReleasePointMoveReservation` 在核实 Dropoff 完成或确认取消后释放剩余预约。两者均检查原动作对象归属，不能释放其他动作资源。
+- `CanDropReservedPointMove`：放货前检查原动作预约、取货阶段、车载货物身份及数量、目标实时合法性。预约不代表取得巷道锁，入口不纳入货位预约；实际进出仍走项目现有锁流程。
+
+访问货位采用独占预约：从实际取/放货位一直到巷道最外侧货位（不含入口），禁止其他动作将它们作为源、目标或访问路径。相关入口均使用 cargoBatchSync；不改变真实库存、车辆位置或巷道锁。本模块不判断路线可达、任务释放/前置和未来客户货物保护，也不生成清障、填充或 FINALIZE，这些由后续动作生成器补齐后才能派车。
+
+隔离验证命令：`powershell -NoProfile -File tests/Test-CargoResources.ps1`。测试编译真实 CargoResources.cs 与 Models.cs，使用轻量库存适配器运行，覆盖 No-hole、实时位置、同巷道、完成货物保护、预约归属、释放及并发争用；不加载宿主、不驱动车辆。测试源使用 .cs.txt 扩展名且不加入工程编译清单，避免混入业务程序集。全项目另用本机宿主依赖编译核验；现场反馈尚未运行验证。
+
 ## 点到点接口改造：第一阶段（2026-11-10）
 
 当前点到点接单接口已改为 `CreateCargoMoveTask(IEnumerable<CargoMoveRequest> tasks)`，单件传一条，多件传多条。原四参数签名已移除；`CreateStationMoveTask` 转入列表接口。下文涉及旧四参数调用、接单立即规划清障的说明属于旧实现，以本节为准。
