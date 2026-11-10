@@ -106,6 +106,51 @@ namespace ProfControl
             public string ItemId { get; set; }
         }
 
+        public enum PointActionType { CUSTOMER_MOVE, RELOCATION, FILLING, FINALIZE }
+        public enum PointActionPhase { TargetPreparation, SourcePreparation, Customer }
+
+        // 候选是只读预览的独立快照，不是已派发的 TaskInfo，也不持有任何资源。
+        public class PointActionCandidate
+        {
+            public string BatchId { get; set; }
+            public string ItemId { get; set; }
+            public string TaskNo { get; set; }
+            public int Priority { get; set; }
+            public int SubmissionOrder { get; set; }
+            public PointActionType ActionType { get; set; }
+            public PointActionPhase Phase { get; set; }
+            public string CargoName { get; set; }
+            public string CargoTag { get; set; }
+            public string FromMark { get; set; }
+            public string ToMark { get; set; }
+            public string SourcePocketKey { get; set; }
+            public string TargetPocketKey { get; set; }
+            public double LoadedDistance { get; set; }
+            public bool ClearsSource { get; set; }
+            public string Reason { get; set; }
+        }
+
+        public class PointTaskCandidatePreview
+        {
+            public string ItemId { get; set; }
+            public string TaskNo { get; set; }
+            public CargoTaskStatus Status { get; set; }
+            public string CurrentMark { get; set; }
+            public int CandidateCount { get; set; }
+            public string WaitReason { get; set; }
+            public List<string> Notes { get; set; } = new List<string>();
+        }
+
+        public class PointCandidatePreview
+        {
+            public bool Success { get; set; }
+            public string Error { get; set; }
+            public string BatchId { get; set; }
+            public DateTime GeneratedAt { get; set; }
+            public List<PointActionCandidate> Candidates { get; set; } = new List<PointActionCandidate>();
+            public List<PointTaskCandidatePreview> Tasks { get; set; } = new List<PointTaskCandidatePreview>();
+        }
+
         public class CargoMoveItem
         {
             public string TaskNo { get; set; }

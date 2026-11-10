@@ -1,3 +1,39 @@
+## 点到点候选预览：第三阶段（2026-11-10）
+
+新增只读函数 `GetPointToPointCandidates(batchId)`。每次调用使用当次时间和实时库存，返回独立的 `PointCandidatePreview`；不派车、不创建 TaskInfo、不申请/释放预约、不修改客户状态或等待原因，也不执行 FINALIZE。当前点到点接单后仍然等待，主调度循环尚未接入这些候选；整巷模式和现有车辆执行流程不变。
+
+- `Success/Error` 表示查询是否成功；编号为空、不存在或对应整巷模式时返回明确错误。
+- `Candidates` 返回已排序去重的候选：客户 TaskNo/ItemId、Priority/SubmissionOrder、ActionType、Phase、实际搬运货物、实时 FromMark/ToMark、源目标巷道、LoadedDistance、Reason。候选不是搬运编号或已派发指令。
+- `Tasks` 返回各客户任务的状态快照、成功定位后的 CurrentMark、保留候选数、无候选时的 WaitReason，以及 Notes（包括某一端暂不可准备或候选被去重的原因）。这些诊断不会覆盖 GetBatchDetail 中存储的业务状态。
+
+生成顺序：排除已完成、待核对或已有执行动作的任务，检查释放时间和硬前置，再查询实时源位置并验证 No-hole。硬前置保留接单时自动建立的目标巷道深浅顺序；业务前置默认空，不需要填写。
+
+货物已在最终目标且无未来货物保护或待取货预约时生成 FINALIZE（距离为 0、预览不完成任务）。目标在占用区域时清除最外侧障碍；否则先保护深处尚未完成的客户货物，再填充最终目标前的空位。源端也可独立生成一步清障。两端准备好才生成 CUSTOMER_MOVE。同巷道先清源，客户货物暴露后按假设取走的状态判断能否立即放入，不能则先生成客户货物的异巷道 RELOCATION。
+
+保护检查涵盖未释放、等待前置以及已在自身最终目标但尚未确认完成的客户货物；正式搬运、填充和临时目标都不能封住它们。完成货物仍不可移动。RELOCATION 只能取当前最外侧货物，临时目标必须在其他巷道；源端清障还排除所属客户任务的最终目标巷道。临时搬到某客户最终目标不会改变客户完成状态。
+
+FILLING 只考虑每条其他来源巷道的最外侧普通货物，排除任何已登记客户任务货物。合法来源中，优先使用能同时清除本任务源端阻挡的货物，否则按载货距离选择；一次只填入下一个合法空位。
+
+`PointToPointDistance.cs` 使用与导出模块相同的 MapAnalysisInfo 有向导航距离，校验站点索引并排除 NaN、Infinity、负值、double.MaxValue 和查询异常。不使用 API.Dist 几何距离，不修改全局距离模式。LoadedDistance 是源货位到目标货位的距离，单位沿用宿主地图。临时目标按距离、目标巷道唯一键（Ordinal）、目标站点号确定；填充并列按来源巷道唯一键、源站点号确定。整数站点号按数值比较并排在非整数站点号之前；非整数及数值相同的编号按 Ordinal 比较。
+
+候选按客户优先级、提交顺序排序，同一任务内目标准备优先于源端准备。对同货物、同源位或同目标位的冲突保留排序靠前者；候选之间的外侧访问路径冲突不在预览时占用资源，后续派发须再次检查预约。预览不检查车辆可用性、巷道锁准入、空载路线或车辆路径执行条件，不能直接把候选当作可下发指令。
+
+```csharp
+var preview = GetPointToPointCandidates(batchId);
+if (!preview.Success)
+    Tools.trace(preview.Error);
+else
+{
+    foreach (var action in preview.Candidates)
+        Tools.trace($"{action.TaskNo} | {action.ActionType} | {action.CargoName}/{action.CargoTag} | " +
+            $"{action.FromMark} -> {action.ToMark} | 距离={action.LoadedDistance} | {action.Reason}");
+    foreach (var task in preview.Tasks.Where(t => t.CandidateCount == 0 && t.WaitReason != null))
+        Tools.trace($"{task.TaskNo} 等待：{task.WaitReason}");
+}
+```
+
+本阶段用临时隔离库存及有向图适配器执行真实 Models、CargoResources、PointToPointScheduler 和 PointToPointDistance 源码验证，并使用本机宿主依赖编译全部业务源码；未启动宿主或驱动车辆。
+
 ## 点到点资源检查：第二阶段（2026-11-10）
 
 新增 `CargoResources.cs`，先供点到点动态调度使用，尚未接入派车。整巷模式、`PocketLocks`、原有容量预留和车辆执行状态机保持现状。点到点任务仍只登记等待。
