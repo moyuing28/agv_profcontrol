@@ -59,57 +59,43 @@ namespace ProfControl
         {
             lock (cargoBatchSync)
             {
-                var reasons = new List<string>();
-                foreach (var pickPocket in cargoPockets.Values.OrderBy(p => p.Key, StringComparer.Ordinal))
+                // 从现有库存选 5 件：填写 CargoName、CargoTag 和 ToMark，不新增或移动初始化货物。
+                // ToMark 填 01~04 巷道内具体货位的站点 Mark，不填巷道名称；5 个最终目标货位不能重复。
+                // 下列巷道分配仅为填写提示，可按实际地图调整。相同巷道可放多件，但需选择不同货位。
+                // 不填 Priority / ReleaseTime / AgvName：同优先级、立即释放、自动选车，按列表顺序优先考虑。
+                var tasks = new[]
                 {
-                    if (!TryGetPointPocketState(pickPocket.Key, out var pick, out var error))
-                    {
-                        reasons.Add(error);
-                        continue;
-                    }
-                    if (pick.OutermostMark == null || !TryGetStationCargo(pick.OutermostMark, out var cargo, out _)) continue;
-                    if (cargo.Info.Name != "迈巴赫") continue;
-                    var tag = Convert.ToString(cargo.Tag);
-                    foreach (var dropPocket in cargoPockets.Values.OrderBy(p => p.Key, StringComparer.Ordinal))
-                    {
-                        if (dropPocket.Key == pickPocket.Key ||
-                            !TryGetPointPocketState(dropPocket.Key, out var drop, out _) || drop.NextDropMark == null) continue;
-                        if (!CanPointCargoMove(cargo.Info.Name, tag, drop.NextDropMark, null, out var from, out error) ||
-                            !TryGetPointLoadedDistance(from, drop.NextDropMark, out var distance, out error))
-                        {
-                            reasons.Add(error);
-                            continue;
-                        }
-                        // 与实际执行阶段一致，避免选到直线可达但必经入口不可达的测试组合。
-                        if (!TryPointRouteDistance(new[] { from, pickPocket.Entrance, dropPocket.Entrance, drop.NextDropMark }, out _))
-                        {
-                            reasons.Add($"测试路线必经入口不可达：{from} -> {drop.NextDropMark}");
-                            continue;
-                        }
-                        Tools.trace($"[单件直搬测试] 货物={cargo.Info.Name}/{tag}，实时源位={from}，" +
-                            $"最终目标={drop.NextDropMark}，载货距离={distance}；源最外侧可取、目标为异巷道下一个合法空位。");
-                        var result = CreateCargoMoveTask(new[]
-                        {
-                            new CargoMoveRequest { TaskNo = "TEST001", CargoName = cargo.Info.Name, CargoTag = tag, ToMark = drop.NextDropMark }
-                        });
-                        if (!result.Success)
-                        {
-                            Tools.trace($"[单件直搬测试] 接单失败：{result.Error}");
-                            return;
-                        }
-                        Tools.trace($"[单件直搬测试] 已登记一条任务，批次={result.BatchId}，明细={result.Tasks[0].ItemId}；等待主调度派车。");
-                        var preview = GetPointToPointCandidates(result.BatchId);
-                        if (!preview.Success) Tools.trace($"[单件直搬测试] 候选查询失败：{preview.Error}");
-                        foreach (var candidate in preview.Candidates)
-                            Tools.trace($"[单件直搬初始候选] {candidate.ActionType}，{candidate.CargoName}/{candidate.CargoTag}，" +
-                                $"{candidate.FromMark} -> {candidate.ToMark}，{candidate.Reason}");
-                        foreach (var task in preview.Tasks.Where(t => t.CandidateCount == 0 && t.WaitReason != null))
-                            Tools.trace($"[单件直搬测试] 等待原因：{task.WaitReason}");
-                        return; // 本次启动只提交这一件，不能把后续可行组合一起接单。
-                    }
+                    new CargoMoveRequest { TaskNo = "TEST001", CargoName = "迈巴赫", CargoTag = "000012", ToMark = "63" }, // 例如 01 巷道的具体货位
+                    new CargoMoveRequest { TaskNo = "TEST002", CargoName = "迈巴赫", CargoTag = "000014", ToMark = "65" }, // 例如 02 巷道的具体货位
+                    new CargoMoveRequest { TaskNo = "TEST003", CargoName = "迈巴赫", CargoTag = "000016", ToMark = "76" }, // 例如 03 巷道的具体货位
+                    new CargoMoveRequest { TaskNo = "TEST004", CargoName = "迈巴赫", CargoTag = "000018", ToMark = "80" }, // 例如 04 巷道的具体货位
+                    new CargoMoveRequest { TaskNo = "TEST005", CargoName = "迈巴赫", CargoTag = "000020", ToMark = "85" }  // 例如 01 巷道的另一个货位
+                };
+                var incomplete = tasks.Where(t => string.IsNullOrWhiteSpace(t.CargoName) ||
+                    string.IsNullOrWhiteSpace(t.CargoTag) || string.IsNullOrWhiteSpace(t.ToMark)).Select(t => t.TaskNo).ToList();
+                if (incomplete.Count > 0)
+                {
+                    Tools.trace($"[五件点到点测试] 请先填写货物类型、编号和目标货位：{string.Join(", ", incomplete)}；未提交任何任务。");
+                    return;
                 }
-                Tools.trace("[单件直搬测试] 没有找到可直接搬运的迈巴赫货物和异巷道合法目标，未创建任务。" +
-                    string.Join("；", reasons.Where(r => !string.IsNullOrEmpty(r)).Distinct().Take(5)));
+                var result = CreateCargoMoveTask(tasks); // 五条一次提交，整批校验；不是循环调用五次接单。
+                if (!result.Success)
+                {
+                    Tools.trace($"[五件点到点测试] 接单失败：{result.Error}");
+                    return;
+                }
+                Tools.trace($"[五件点到点测试] 接单成功，批次={result.BatchId}，客户任务数={result.Tasks.Count}，等待主调度自动派车。");
+                var detail = GetBatchDetail(result.BatchId);
+                foreach (var item in detail.Items)
+                    Tools.trace($"[五件点到点清单] {item.TaskNo}，明细={item.ItemId}，货物={item.CargoName}/{item.CargoTag}，" +
+                        $"接单时源位={item.SourceMark} -> 最终目标={item.TargetMark}，硬前置=[{string.Join(", ", item.HardPredecessorTaskNos)}]");
+                var preview = GetPointToPointCandidates(result.BatchId);
+                if (!preview.Success) Tools.trace($"[五件点到点测试] 候选查询失败：{preview.Error}");
+                foreach (var candidate in preview.Candidates)
+                    Tools.trace($"[五件点到点初始候选] {candidate.TaskNo}，{candidate.ActionType}，" +
+                        $"实际货物={candidate.CargoName}/{candidate.CargoTag}，{candidate.FromMark} -> {candidate.ToMark}，{candidate.Reason}");
+                foreach (var task in preview.Tasks.Where(t => t.CandidateCount == 0 && t.WaitReason != null))
+                    Tools.trace($"[五件点到点初始等待] {task.TaskNo}：{task.WaitReason}");
             }
         }
 

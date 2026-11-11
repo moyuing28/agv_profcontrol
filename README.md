@@ -1,147 +1,121 @@
-## 当前启动测试：单件跨巷道直搬
+# SampleProject 项目说明
 
-`script.cs` 当前启用 `TestCargoMoveCreation()`，整巷 `TestPocketMoveBatchCreation(...)` 调用已注释。两种测试通过注释调用切换，不新增开关变量。货物和车辆初始化、每秒调度及每 10 秒批次查询保持原设置。
+本项目是 ProfControl 宿主中的 C# 脚本，入口为 `ProfControl.SampleProject : IAppScript`，通过 partial class 拆分文件。依赖宿主地图、AGV、货物模型和 API，不能作为独立控制台程序运行。
 
-单件测试按巷道唯一键顺序，从现有初始化库存中寻找最外侧可取的迈巴赫货物，再找另一巷道满足 No-hole 的下一个合法放货位，并检查载货及必经入口路线。只提交一条 TEST001，默认立即释放、自动选车，不使用未初始化的固定货物编号，也不选任意空位。如果没有可直搬组合则打印原因并退出，不改库存或降级为清障测试。
+本文说明当前实现；开发过程和历史变更见 Git。功能修改后同步更新对应章节，避免把旧阶段说明与当前行为混用。
 
-启动日志输出实际货物编号、源位、最终目标、接单结果、批次/明细编号和初始候选，正常预期为一条 CUSTOMER_MOVE。后续日志应看到取货、目标入口 detectObject、放货，客户完成后再看到车辆收尾和批次结束；批次查询同时打印 CustomerCompletedTime 与 CompletedTime，便于核对两者边界。
+## 两种搬运模式
 
-本次只修改启动测试和日志，未启动宿主或运行 Init()；Init() 原有清货、摆车行为仍然存在，现场运行需使用测试环境。
+| 模式 | 创建入口 | 调度方式 |
+| --- | --- | --- |
+| 单件／多个点到点 | `CreateCargoMoveTask(IEnumerable<CargoMoveRequest> tasks)` | 每件指定货物和最终货位，按实时状态逐步清障、填充、正式搬运或到位确认，可多车并行 |
+| 整巷批次搬运 | `CreatePocketMoveBatch(sourcePocketNames, targetPocketNames)` | 来源按巷道分组轮转派车，目标巷道和具体货位动态分配 |
 
-## 点到点派车和执行反馈：第四阶段（2026-11-10）
+单件与多个点到点共用一个接口，分别传一条或多条。当前只允许一个未结束业务批次，不支持追加点到点任务，也不支持两种模式混跑。两种模式共用执行器、停车和批次查询，采用各自的调度规则。
 
-点到点动态调度已接入每秒主循环和卸货后的续单入口。提交 `CreateCargoMoveTask(tasks)` 后，任务等待最近一轮调度；不需要手动调用派车函数。下方前三阶段中“仅登记、不派车”的说明是当时的阶段边界，以本节为准。`GetPointToPointCandidates(batchId)` 仍是纯查询，不会因预览而派车或完成任务。
+## 文件职责
 
-新增 `PointToPointDispatch.cs`：按候选顺序扫描，源巷道锁、预约、容量、车辆或路线不满足时继续检查后续动作。先确定动作再选车，在同一调度临界区申请货物/访问货位预约、标记目标容量、取得源巷道锁并创建 TaskInfo。每次派发成功或成功执行 FINALIZE 后重新生成候选。并行名额满时仍继续寻找无需车辆的 FINALIZE。
+| 文件 | 职责 |
+| --- | --- |
+| `script.cs` | 配置、初始化、启动测试、每秒调度及 HTTP 服务 |
+| `Models.cs` | 请求、业务批次、客户明细、执行步骤及查询快照 |
+| `MapConfig.cs` | 地图分类缓存、巷道入口、深浅顺序和朝向校验 |
+| `PointToPointScheduler.cs` | 点到点接单校验、硬前置、实时候选生成与排序 |
+| `PointToPointDistance.cs` | 有向导航距离、路线可达性与稳定排序 |
+| `PointToPointDispatch.cs` | 点到点派车、FINALIZE、执行反馈和完成统计 |
+| `CargoResources.cs` | 点到点实时货物、No-hole、访问货位预约及归属检查 |
+| `CargoBatchManager.cs` | 整巷批次创建与派发、两种模式的进度和详情查询 |
+| `TaskCreator.cs` | 空车移动、内部旧清障规划辅助函数、现有测试入口 |
+| `TaskExecutor.cs` | 车辆搬运状态机、取放反馈、容量预留及货物巷道锁 |
+| `ParkingDispatch.cs` / `AgvParking.cs` | 动态停车、出库与初始化摆车 |
+| `CargoInitializer.cs` / `CargoEditor.cs` | 清货、位置查询及货物增删改 |
+| `StationOptions.cs` | 有货站点、空货位查询 |
+| `HttpApi.cs` / `AgvFaults.cs` | HTTP 路由、AGV 故障查询和上报 |
+| `SampleProject1109.csproj` / `project.config` | 编译引用、源文件与宿主配置 |
 
-选车只使用当前空闲、无其他执行占用、无车载货物且可出停车区的 AGV；指定 AgvName 时仅考虑指定车辆。普通派车按到源货位的可达空载路线距离最短选择，并列按实际 AGV Name 的数值顺序（非整数名称用稳定字符串顺序）。卸货后续单保留项目原有偏好，先尝试当前车辆。忙碌及返程车辆不提前接单。
-
-空载距离按车辆当前位置经停车出口（如适用）、源入口到源货位的有向导航路线累加。载货阶段经源入口、目标入口到目标货位的路线仍检查可达性；不可达车辆不参与。选车不再估算耗时，也不使用额外速度参数；取放和入口检测仍沿用现有执行配置。
-
-执行器只为带 `TaskInfo.PointAction` 的新点到点搬运增加以下检查和反馈：
-
-- 下发取货动作及处理取货完成时，核对实时货物、源锁、预约、车载状态及目标准备。取货同步成功后只释放源货位/访问预约，目标及货物身份预约仍保留。
-- 目标准入、下发放货动作及处理放货完成时，复核预约归属、车载货物、No-hole、未来客户货物保护及目标锁。放货同步成功后释放剩余货位预约，设置 PointDropCompleted/DropoffCompletedTime，巷道锁仍由原流程处理。
-- CUSTOMER_MOVE 在最终目标放货完成时完成客户任务；RELOCATION 和 FILLING 只结束该次货物搬运，所属客户任务重新等待动态判断。临时搬到某客户最终目标，仍须独立通过 FINALIZE。
-- FINALIZE 重新核对候选后直接完成客户任务，不创建 TaskInfo，不占 AGV、锁或预约。完成后立即重算后续前置和候选。
-- 指令异常、取放前状态变化、锁/预约归属不符时，将动作和批次转为 NeedsReview，保留尚持有的资源，不自动回滚、释放其他动作资源或重复派发。已经完成的客户状态不会因车辆收尾异常被撤销，但批次仍可进入待核对。
-
-车辆取货后驶到源入口才延迟解锁、目标入口 detectObject、卸货后从货位直接续单、旧目标锁交接及动态停车均沿用当前项目流程；没有按离散仿真模型重写这些阶段。整巷模式继续使用原 DispatchCargoBatch 和原完成逻辑。
-
-点到点查询中的 CompletedCount 是客户完成数；`CargoMoveItem.CompletedTime/CompletionAction` 记录客户完成时刻和方式。`CargoMoveBatch/查询摘要.CustomerCompletedTime` 是最后一个客户完成时刻，列表 HTTP 查询也返回该字段。客户全部完成后，批次仍需等该批已派步骤全部 Finished、预约和货物巷道锁释放才进入 Completed，CompletedTime 记录此时刻；期间显示“客户完成，车辆收尾中”。本阶段未增加 SystemMakespan 或自动死锁结论。
-
-步骤查询新增 PointAction、PointDropCompleted 和 DropoffCompletedTime。Filling 追加为新的 CargoStepType，原枚举值不变。ExecutionTaskId 指向最近一次实际搬运；FINALIZE 通过客户的 CompletionAction 表达，不伪造车辆搬运步骤。
-
-验证：使用真实候选、预约、派车和 TaskExecutor 状态机源码，配合临时库存/有向图/车辆/停车适配器完成 155 项隔离断言；覆盖并行、续单、预约分阶段释放、同巷道暂存、清障及填充闭环、FINALIZE、不可达、指令异常及锁归属变化。全部业务源码另用本机宿主依赖编译。未启动宿主、未执行 Init()、未驱动真实车辆；现场停车和设备反馈仍需联调。
-
-## 点到点候选预览：第三阶段（2026-11-10）
-
-新增只读函数 `GetPointToPointCandidates(batchId)`。每次调用使用当次时间和实时库存，返回独立的 `PointCandidatePreview`；不派车、不创建 TaskInfo、不申请/释放预约、不修改客户状态或等待原因，也不执行 FINALIZE。当前点到点接单后仍然等待，主调度循环尚未接入这些候选；整巷模式和现有车辆执行流程不变。
-
-- `Success/Error` 表示查询是否成功；编号为空、不存在或对应整巷模式时返回明确错误。
-- `Candidates` 返回已排序去重的候选：客户 TaskNo/ItemId、Priority/SubmissionOrder、ActionType、Phase、实际搬运货物、实时 FromMark/ToMark、源目标巷道、LoadedDistance、Reason。候选不是搬运编号或已派发指令。
-- `Tasks` 返回各客户任务的状态快照、成功定位后的 CurrentMark、保留候选数、无候选时的 WaitReason，以及 Notes（包括某一端暂不可准备或候选被去重的原因）。这些诊断不会覆盖 GetBatchDetail 中存储的业务状态。
-
-生成顺序：排除已完成、待核对或已有执行动作的任务，检查释放时间和硬前置，再查询实时源位置并验证 No-hole。硬前置保留接单时自动建立的目标巷道深浅顺序；业务前置默认空，不需要填写。
-
-货物已在最终目标且无未来货物保护或待取货预约时生成 FINALIZE（距离为 0、预览不完成任务）。目标在占用区域时清除最外侧障碍；否则先保护深处尚未完成的客户货物，再填充最终目标前的空位。源端也可独立生成一步清障。两端准备好才生成 CUSTOMER_MOVE。同巷道先清源，客户货物暴露后按假设取走的状态判断能否立即放入，不能则先生成客户货物的异巷道 RELOCATION。
-
-保护检查涵盖未释放、等待前置以及已在自身最终目标但尚未确认完成的客户货物；正式搬运、填充和临时目标都不能封住它们。完成货物仍不可移动。RELOCATION 只能取当前最外侧货物，临时目标必须在其他巷道；源端清障还排除所属客户任务的最终目标巷道。临时搬到某客户最终目标不会改变客户完成状态。
-
-FILLING 只考虑每条其他来源巷道的最外侧普通货物，排除任何已登记客户任务货物。合法来源中，优先使用能同时清除本任务源端阻挡的货物，否则按载货距离选择；一次只填入下一个合法空位。
-
-`PointToPointDistance.cs` 使用与导出模块相同的 MapAnalysisInfo 有向导航距离，校验站点索引并排除 NaN、Infinity、负值、double.MaxValue 和查询异常。不使用 API.Dist 几何距离，不修改全局距离模式。LoadedDistance 是源货位到目标货位的距离，单位沿用宿主地图。临时目标按距离、目标巷道唯一键（Ordinal）、目标站点号确定；填充并列按来源巷道唯一键、源站点号确定。整数站点号按数值比较并排在非整数站点号之前；非整数及数值相同的编号按 Ordinal 比较。
-
-候选按客户优先级、提交顺序排序，同一任务内目标准备优先于源端准备。对同货物、同源位或同目标位的冲突保留排序靠前者；候选之间的外侧访问路径冲突不在预览时占用资源，后续派发须再次检查预约。预览不检查车辆可用性、巷道锁准入、空载路线或车辆路径执行条件，不能直接把候选当作可下发指令。
-
-```csharp
-var preview = GetPointToPointCandidates(batchId);
-if (!preview.Success)
-    Tools.trace(preview.Error);
-else
-{
-    foreach (var action in preview.Candidates)
-        Tools.trace($"{action.TaskNo} | {action.ActionType} | {action.CargoName}/{action.CargoTag} | " +
-            $"{action.FromMark} -> {action.ToMark} | 距离={action.LoadedDistance} | {action.Reason}");
-    foreach (var task in preview.Tasks.Where(t => t.CandidateCount == 0 && t.WaitReason != null))
-        Tools.trace($"{task.TaskNo} 等待：{task.WaitReason}");
-}
-```
-
-本阶段用临时隔离库存及有向图适配器执行真实 Models、CargoResources、PointToPointScheduler 和 PointToPointDistance 源码验证，并使用本机宿主依赖编译全部业务源码；未启动宿主或驱动车辆。
-
-## 点到点资源检查：第二阶段（2026-11-10）
-
-新增 `CargoResources.cs`，先供点到点动态调度使用，尚未接入派车。整巷模式、`PocketLocks`、原有容量预留和车辆执行状态机保持现状。点到点任务仍只登记等待。
-
-- `TryGetPointCargoSource`：按类型和编号查询实时源位置，拒绝重复身份、非单件货物和车载货物。客户明细中的 SourceMark 仅为接单快照。
-- `TryGetPointPocketState`：按 Slots 从深到浅检查 No-hole、单货位单货物和朝向配置，返回当前最外侧货位及下一个合法放货位。空巷道从最深位开始，满巷道无合法放货位；已有空洞只报告，不修复库存。
-- `CanPickPointCargo` / `CanPointCargoMove`：检查最外侧可取、已完成点到点客户货物保护、即时取放合法性及预约冲突；同巷道放货按假设取走后的占用计算。货物已到目标返回不需搬运，后续应走 FINALIZE。
-- `TryReservePointMove`：动作确定后按 TaskInfo 实例及 TaskId 一次性预约货物身份、源目标和两端外侧访问货位，失败无部分占用。相同对象、相同内容可在重新校验成功后重复申请；不同对象不能冒用相同 TaskId。
-- `ReleasePointSourceReservation`：调用方核实 Pickup 完成后释放源访问位，仍保留目标访问位和货物身份；`ReleasePointMoveReservation` 在核实 Dropoff 完成或确认取消后释放剩余预约。两者均检查原动作对象归属，不能释放其他动作资源。
-- `CanDropReservedPointMove`：放货前检查原动作预约、取货阶段、车载货物身份及数量、目标实时合法性。预约不代表取得巷道锁，入口不纳入货位预约；实际进出仍走项目现有锁流程。
-
-访问货位采用独占预约：从实际取/放货位一直到巷道最外侧货位（不含入口），禁止其他动作将它们作为源、目标或访问路径。相关入口均使用 cargoBatchSync；不改变真实库存、车辆位置或巷道锁。本模块不判断路线可达、任务释放/前置和未来客户货物保护，也不生成清障、填充或 FINALIZE，这些由后续动作生成器补齐后才能派车。
-
-隔离验证命令：`powershell -NoProfile -File tests/Test-CargoResources.ps1`。测试编译真实 CargoResources.cs 与 Models.cs，使用轻量库存适配器运行，覆盖 No-hole、实时位置、同巷道、完成货物保护、预约归属、释放及并发争用；不加载宿主、不驱动车辆。测试源使用 .cs.txt 扩展名且不加入工程编译清单，避免混入业务程序集。全项目另用本机宿主依赖编译核验；现场反馈尚未运行验证。
-
-## 点到点接口改造：第一阶段（2026-11-10）
-
-当前点到点接单接口已改为 `CreateCargoMoveTask(IEnumerable<CargoMoveRequest> tasks)`，单件传一条，多件传多条。原四参数签名、公开的 `CreateStationMoveTask` 和 `/api/createStationMoveTask` 路由均已移除，不保留兼容入口；脚本接单统一使用货物列表接口。下文涉及旧四参数调用、接单立即规划清障的说明属于旧实现，以本节为准。
-
-本阶段只校验和登记，不生成执行步骤、不预约资源、不派车。查询状态为 Waiting，原因是“已登记，等待点到点动态调度接入”。因此目前点到点搬运暂不能执行，后续阶段接入动态调度。整巷批次和车辆执行状态机未修改。
-
-请求字段：TaskNo、CargoName、CargoTag、ToMark、AgvName（默认 00 自动选车）、Priority（越小越优先，同值按提交顺序）、ReleaseTime（空表示立即释放，现场本地时间）、PredecessorTaskNos。前置编号仅引用本次提交的任务。最终目标可以已有货物，货物已在最终目标也允许登记。
-
-整批校验包括：必填字段、重复任务号/货物/目标、货物唯一且数量为 1 并位于有效货位、源目标地图及朝向配置、指定车辆、业务前置及目标巷道从深到浅前置的联合循环检查。全部通过后一次登记；失败不产生批次、执行任务、锁或预约。
-
-返回 PointToPointCreateResult：Success、Error、BatchId、Tasks（TaskNo/ItemId）。使用 GetBatchDetail(BatchId) 查询各条任务；PredecessorTaskNos 为业务前置，HardPredecessorTaskNos 包含自动生成的目标巷道前置，列表均为独立快照。
-
-当前一次接收一组任务，不支持向未完成组追加任务，也不支持与整巷批次或其他执行任务混跑。SourceMark 仅是接单时位置快照，后续动态调度必须重新查询货物实时位置。
+## 点到点接单
 
 ```csharp
 var result = CreateCargoMoveTask(new[]
 {
     new CargoMoveRequest
     {
-        TaskNo = "T001", CargoName = "迈巴赫", CargoTag = "000001",
-        ToMark = "85", Priority = 1
+        TaskNo = "T001", CargoName = "迈巴赫", CargoTag = "000012",
+        ToMark = "63"
+    },
+    new CargoMoveRequest
+    {
+        TaskNo = "T002", CargoName = "迈巴赫", CargoTag = "000014",
+        ToMark = "65"
     }
 });
+if (!result.Success)
+    Tools.trace(result.Error);
+else
+{
+    Tools.trace($"已接收批次：{result.BatchId}");
+    var detail = GetBatchDetail(result.BatchId);
+}
+```
+
+货物及站点号仅为示例，使用时按实际地图填写。旧的四参数 `CreateCargoMoveTask(...)` 和公开站点搬运入口已经移除。
+
+| 请求字段 | 含义 |
+| --- | --- |
+| `TaskNo` | 本次提交内唯一的客户任务编号 |
+| `CargoName` / `CargoTag` | 类型与编号共同标识一件货物；编号按字符串保存 |
+| `ToMark` | 最终货位的站点 Mark，不能填巷道名称 |
+| `AgvName` | 默认 `"00"` 自动选车，也可指定实际车辆名称 |
+| `Priority` | 默认 0；越小越优先，同值按提交顺序 |
+| `ReleaseTime` | 默认空，立即可参与调度；填写后按现场本地时间等待释放 |
+| `PredecessorTaskNos` | 默认空；当前业务无需填写，只允许引用本次提交中的其他任务 |
+
+同一目标巷道按最终货位从深到浅自动建立硬前置。优先级允许跳过受阻任务；释放时间和硬前置必须满足。
+
+整批校验任务号、货物、最终目标重复，货物唯一性、数量为 1、站点及朝向配置、指定车辆和前置循环。最终目标允许已有货物，也允许客户货物已经到位。任一校验失败均不登记批次。
+
+成功返回 `PointToPointCreateResult`：`Success`、`Error`、`BatchId`、`Tasks[]`（每条为 `TaskNo`、`ItemId`）。没有顶层 `ItemId`。成功表示接收，接单函数本身不派车；最近一轮主调度再处理。
+
+## 点到点动态调度
+
+货物起点每次查询实时位置；明细 `SourceMark` 只是接单快照。巷道货位按深到浅连续存放（No-hole），只能取最外侧货物，只能放到连续区域外的下一个空位；空巷道从最深位开始。每位一件、每车一件，已完成客户货物不可再搬。
+
+| 动作 | 作用 |
+| --- | --- |
+| `CUSTOMER_MOVE` | 源货物可取且最终目标准备好后，正式搬至最终目标 |
+| `RELOCATION` | 临时移走源端、目标端或未来客户货物的阻挡 |
+| `FILLING` | 使用不属于客户任务的普通货物，填入目标深处的下一个合法空位 |
+| `FINALIZE` | 已在最终目标时，检查条件后零搬运确认完成，不占 AGV、不创建 TaskInfo |
+
+目标端依次清除占位障碍、保护深处未完成客户货物、填充深处空位，再判断最终目标能否放入。源端可独立生成当前一步清障。正式搬运必须两端准备完毕，不先取客户货物上车等待目标。
+
+Relocation 只取可取的最外侧货物，临时目标必须在其他巷道；源端清障还排除所属客户任务的最终目标巷道。合法目标中选载货距离最短者，并列按目标巷道唯一键、站点号确定。Filling 每条来源巷道只考虑最外侧普通货物，优先使用能同时清除此客户源端阻挡的合法货物，否则选载货距离最短者，并列按来源巷道唯一键、站点号确定。
+
+同巷道任务先清源；客户货物暴露后按假设取走的状态检查能否立即放到最终目标，不能则先暂存到其他巷道。临时搬运恰好到达客户最终目标不会自动完成客户任务，仍需单独 FINALIZE。未释放或等待前置的客户货物也纳入未来货物保护。
+
+候选按客户优先级、提交顺序及动作阶段排序，同一任务优先目标端准备。对同货物、同源或同目标的冲突候选保留排序靠前者。扫描时遇到锁、预约、容量、路线或车辆不满足，继续检查后续动作。每成功派发一个动作或完成一次 FINALIZE，立即按最新状态重新生成候选。
+
+载货距离采用 `MapAnalysisInfo` 有向导航距离，含去回程不对称；不可达、无效距离不参与。普通派车选择到源位空载路线最短的可用车辆，并列按实际 AGV 名称数值排序；卸货后续单保留当前车辆优先的原有流程。空载路线经停车出口（如适用）、源入口到源位；载货实际路线另检查经过源、目标入口的可达性。忙碌和返程车辆不提前接单。当前不按预计完成时间选车，也没有新增速度参数。
+
+`GetPointToPointCandidates(batchId)` 是只读预览：返回 `Success/Error`、`Candidates`、`Tasks`。候选包含动作、实际货物、实时起终点、`LoadedDistance` 和原因；任务诊断包含候选数、等待原因和 Notes。预览不派车、不预约、不执行 FINALIZE，也不检查车辆可用性及巷道锁准入，不能直接作为下发指令。
+
+## 整巷批次调度
+
+```csharp
+var result = CreatePocketMoveBatch(
+    new[] { "07", "08" }, new[] { "01", "02", "03", "04" });
 if (result.Success)
-    Tools.trace($"已登记批次：{result.BatchId}");
+    Tools.trace(result.Batch.BatchId);
 else
     Tools.trace(result.Error);
 ```
 
-# SampleProject 项目说明
+参数传巷道子分类名称集合，来源与目标不能重叠。接单记录当时货物身份，跳过空来源，全部无货则拒绝；后来新增货物不自动加入。创建结果提供 `RequiredCount` 和 `TargetCapacities` 容量快照，容量不足时允许接收，派车时逐件等待。
 
-本文介绍当前项目的功能、配置、运行流程和限制，供维护者和 AI 理解源码。修改功能后同步更新本文；变更记录放在 Git 提交中。实际行为以源码及现场验证为准，不要把规划功能当作已实现功能。
+来源按 `取货优先级组` 轮转，各巷道从外到内取货；前组暂不可派时继续后组。目标按 `卸货目标并行组` 组内轮转，整组无可用容量后使用下一组。未配置的来源、目标按本批次列表追加到最后一组，具体分组以 `script.cs` 为准。
 
-## 项目用途与运行环境
+派车时确定目标巷道并预留容量，取得目标锁后才分配具体可进入的最深空位。派车后不途中切换目标巷道。身份或执行关联异常进入 `NeedsReview`，保留需要核对的资源，不改搬其他货物。
 
-这是 ProfControl 中运行的 C# 脚本项目，入口类为 `ProfControl.SampleProject : IAppScript`，通过 partial class 拆分文件。依赖宿主软件的地图、AGV、货物模型及 API，不是独立控制台程序。
-
-目前支持空车移动、点到点清障搬运、多条源巷道到多条目标巷道的业务批次搬运，以及动态停车。业务批次调度由 `CargoBatchManager.cs` 实现。
-
-## 文件职责
-
-| 文件 | 职责 |
-| --- | --- |
-| `script.cs` | 配置、初始化测试场景、启动每秒调度及 HTTP 服务 |
-| `MapConfig.cs` | 启动时读取分类、校验货物巷道并缓存站点集合、入口、货位顺序及朝向区域 |
-| `Models.cs` | 执行状态、业务批次、业务明细、查询快照和 TaskInfo |
-| `CargoBatchManager.cs` | 创建巷道业务批次、检查来源货位有货、逐步派发、同步进度及查询 |
-| `TaskCreator.cs` | 空车移动、指定货位搬运、搬开阻挡货物的清障步骤组 |
-| `TaskExecutor.cs` | 搬运状态机、库位朝向区域解析、车辆分配、容量预留、卸货准入和货物巷道锁 |
-| `ParkingDispatch.cs` | 动态停车位选择、停车巷道进出互斥及可出库车辆筛选 |
-| `AgvParking.cs` | 按 parkingstaID 初始化车辆位置、登记占用并加载停车巷道 |
-| `CargoInitializer.cs` | 清理货物区域、查询货物编号列表及输出当前位置 |
-| `CargoEditor.cs` | 添加、修改、删除单件货物，验证类型、编号、货位和任务冲突 |
-| `StationOptions.cs` | 查询有货站点及可选卸货站点；查询结果不等于可立即派车 |
-| `HttpApi.cs` | `/api/agvs`、`/api/tasks` 查询接口 |
-| `globalusing.cs` | 系统及宿主 API 的全局 using |
-| `project.config` / `SampleProject0927.csproj` / `SampleProject0913.csproj` | 宿主项目配置及 C# 编译引用、源文件清单；当前两个项目文件均包含 `MapConfig.cs` |
 
 ## 地图和标识约定
 
@@ -152,8 +126,8 @@ else
 - `入口`：货物巷道和停车巷道的进出口确认点；每条识别出的巷道需要唯一入口。
 - `agv停放点`：AGV 实际停车位，入口不作为停车位。
 - `01`～`25`：货物巷道子分类名称，保持两位数字格式，在 `script.cs` 的 `巷道子分类名称` 中配置；当前巷道批次要求每个分类完整对应一条物理巷道。
-- `卸货目标并行组`：卸货目标的分组优先级，当前为 `{01,02}` → `{03,04}` → `{05}`。组内轮流分配，整组没有可用容量后才使用下一组；在途预留计入容量，无需等货物全部实际卸完。未配置的批次目标追加到最后一组。这不改变来源取货顺序。
-- `取货优先级组`：来源巷道的派车先后，当前为 `{06～15}` → `{16～25}`。两者是同一个批次内的同一条搬运流程，只是顺序不同：优先派 06～15，组内按巷道轮询；优先巷道暂时派不出车时，空闲车辆直接接着派 16～25，不返程、不重建任务。未配置的来源巷道按批次来源列表顺序追加到最后一组。
+- `卸货目标并行组`：卸货目标的分组优先级，当前为 `{01,02}` → `{03,04}`。组内轮流分配，整组没有可用容量后才使用下一组；在途预留计入容量，无需等货物全部实际卸完。未配置的批次目标追加到最后一组。这不改变来源取货顺序。
+- `取货优先级组`：来源巷道的派车先后，当前为 `{07～15}` → `{17～25}`。两者是同一个批次内的同一条搬运流程，只是顺序不同：优先派 06～15，组内按巷道轮询；优先巷道暂时派不出车时，空闲车辆直接接着派 16～25，不返程、不重建任务。未配置的来源巷道按批次来源列表顺序追加到最后一组。
 - `BelongPocketLines` 表示站点所属巷道；`OrderStations` 是从内部到门口的拓扑顺序，不要按站点编号排序。
 - 内部 `PocketKey` 使用巷道首站 Mark，不等于入口编号，也不等于子分类名称。
 - `CreatePocketMoveBatch(new[] { "01" }, new[] { "03" })` 的参数是子分类名称，不能传内部 PocketKey 或入口站点号。
@@ -172,138 +146,6 @@ else
 
 `mapConfigurationLoaded` 防止同一个脚本实例重复加载。调度周期为 1 秒，每轮按需读取货物及车辆当前状态，不会每秒重建地图配置。
 
-## 三层任务与两类批次编号
-
-1. `CargoMoveBatch`：客户的一次单件或巷道搬运要求，统一通过批次编号查询。
-2. `CargoMoveItem`：每件目标货物一条业务明细，保存 `CargoName`、`CargoTag`、起点和目标要求。单件搬运保存 `TargetMark`；巷道搬运保存 `TargetPocketNames`，具体卸货位动态分配。
-3. `TaskInfo` / 查询中的 `CargoStepDetail`：明细下的执行步骤，保存本步骤实际搬运货物的类型、编号、起终点、车辆、状态及等待原因。`StepType` 区分 `Clearance` 清障、`Staging` 暂存和 `TargetMove` 目标搬运。
-
-业务关联用 `CargoBatchId`、`CargoItemId`、`TaskId`。清障步骤组仍用 `ClearanceBatchId`、`ClearanceSequence` 和 `PendingClearanceBatches` 控制串行执行，但这些步骤全部关联同一业务明细并向客户返回。障碍货物不增加目标货物清单数量，而是在该明细的 `Steps` 中展示。
-
-点到点清障搬运同时检查取货端和卸货端到入口之间的阻挡货物，先清卸货端、再清取货端，最后搬目标货物，**不包含自动搬回原位**。同巷道阻碍去重后统一从外到内清理，目标货物自身不作为卸货端阻碍；若目标货物挡住更深处阻碍的取货路径，则先将目标货物暂存到其他巷道，最后从暂存位搬到指定卸货位，规划时计入额外暂存容量。卸货位本身必须为空。
-
-清障存放位排除取卸货巷道，只使用其他有效、未锁定巷道中从入口连续可达的空位；规划时模拟逐次占用，固定每一步存放位置。可达容量不足则整组拒绝，不先搬一部分。步骤串行执行，前一步结束（含退出巷道和停车）后才激活下一步，执行时仍复查站点、容量和巷道锁。同巷道最终搬运的容量预留按目标货物取走后的状态计算。
-
-### 编号含义
-
-“批次”就是一次客户搬运请求，不要求必须搬多件货。单件点到点也创建一个批次，里面只有一条目标货物明细。
-
-| 字段 | 含义 | 编号方式 |
-| --- | --- | --- |
-| `BatchId` | 这一次搬运请求；查询整次请求的进度和详情 | 自动生成 GUID |
-| `ItemId` | 请求中某件目标货物的搬运明细 | 自动生成 GUID |
-| `Steps[].TaskId` | 具体一次清障、暂存或最终搬运步骤 | 自动生成 GUID |
-| `Steps[].Sequence` | 明细内步骤的执行顺序 | 从 1 开始的顺序号 |
-| `PickSequence` | 来源巷道内从外到内的取货顺序 | 不是步骤编号，也不是整批强制执行顺序 |
-| `CargoTag` | 货物本身的编号，与 `CargoName` 一起识别货物 | 调用方填写的字符串，例如 `000001` |
-
-GUID 形如 `a3f19c42-6b87-4d20-9e51-8c02f347ab69`，不是乱码，也不是连续编号；不要按 GUID 判断先后顺序。客户不需要填写任务 GUID，创建成功后保存 `BatchId` 即可查询，再按 `ItemId`、`TaskId` 区分明细和步骤。重复查询同一个已创建任务时，这些编号保持不变；重新创建请求会产生新编号。
-
-### 点到点带障碍：调用与返回示例
-
-假设客户要求将迈巴赫 `000001` 从站点 71 搬到空站点 85，取货路径上有两件障碍货，需要先搬到其他巷道的空货位。以下站点、障碍和清障位置仅为结构示例，是否可搬以及实际清障位置取决于地图和可达空位。
-
-```text
-一次搬运请求（BatchId）
-└─ 一条目标货物明细（ItemId）：迈巴赫 000001，71 → 85
-   ├─ 第1步（独立 TaskId）：迈巴赫 000002，72 → 90，Clearance 清障
-   ├─ 第2步（独立 TaskId）：迈巴赫 000003，73 → 91，Clearance 清障
-   └─ 第3步（独立 TaskId）：迈巴赫 000001，71 → 85，TargetMove 最终搬运
-```
-
-创建函数返回 `CargoMoveCreateResult`，字段为 `Success`、`Error`、`BatchId`、`ItemId`、`CargoName`、`CargoTag`、`FromMark`、`ToMark`。**创建结果不直接包含 `TaskId` 或步骤列表**；成功只表示创建成功，不表示搬运完成。失败时读取 `Error`，不要继续用失败结果查询详情。
-
-```csharp
-var result = CreateCargoMoveTask("迈巴赫", "000001", "85");
-if (!result.Success)
-{
-    Tools.trace($"创建失败：{result.Error}");
-}
-else
-{
-    // 保存 result.BatchId，后续重复查询这个编号取得最新进度。
-    var detail = GetBatchDetail(result.BatchId);
-    var item = detail?.Items.FirstOrDefault(i => i.ItemId == result.ItemId);
-    if (item != null)
-    {
-        Tools.trace($"目标货物={item.CargoName}/{item.CargoTag}，" +
-            $"目标站点={item.TargetMark}，状态={item.StatusText}，" +
-            $"步骤完成={item.CompletedStepCount}/{item.TotalStepCount}");
-        foreach (var step in item.Steps)
-            Tools.trace($"第{step.Sequence}步，TaskId={step.TaskId}，" +
-                $"类型={step.StepType}，货物={step.CargoName}/{step.CargoTag}，" +
-                $"{step.FromMark} → {step.ToMark}，AGV={step.AgvName}，" +
-                $"状态={step.StatusText}，等待原因={step.WaitReason}");
-    }
-}
-```
-
-每一步的 `TaskId` 都在 `GetBatchDetail(...).Items[].Steps[]` 中返回，不只是反馈整体进度。要跟踪某一步，重新查询该 `BatchId` 后，在对应明细的 `Steps` 中查找同一个 `TaskId`；目前没有独立的按 `TaskId` 查询步骤的公开函数。
-
-明细的 `ExecutionTaskId` 关联最终目标搬运步骤，不是“当前正在执行步骤”的编号；逐步跟踪应使用 `Steps`。`Activated` 表示步骤已加入执行任务池，不等于正在执行或已经完成；结合 `Status` / `StatusText` 判断，尚未激活的步骤显示“等待前序步骤”，`AgvName` 可为空。
-
-这个例子中，清障完成两步时，`CompletedStepCount/TotalStepCount` 为 `2/3`，但目标货物尚未完成，所以批次的 `CompletedCount/TotalCount` 仍为 `0/1`。全部步骤完成（含车辆停车）后才变为 `3/3` 和 `1/1`。如果需要先暂存目标货物，还会返回 `Staging` 步骤。障碍货不会自动搬回原位。
-
-这些函数返回 C# 对象，不会自动变成 HTTP JSON 接口。查询返回独立快照，需要再次调用获取最新状态。`SourceMark`、`TargetMark` 和每步 `FromMark/ToMark` 是搬运起终点，不表示货物实时位置；实时位置查询使用现有货物位置查询逻辑。
-
-## 业务批次创建与派发
-
-巷道搬运使用 `CreatePocketMoveBatch(IEnumerable<string> sourcePocketNames, IEnumerable<string> targetPocketNames)`，两个参数均传数组或列表，不提供双字符串重载；返回 `CargoBatchCreateResult`，检查 `Success`、`Error` 和成功后的 `Batch.BatchId`。单件搬运使用 `CreateCargoMoveTask`，返回 `BatchId`、`ItemId`。两种入口共用下面的明细与进度查询。
-
-- 创建时校验巷道配置，按物理巷道去重并保留顺序；来源目标不能重叠。跳过空来源，全部无货则拒绝。
-- 支持 `CreatePocketMoveBatch(new[] { "01", "02", "03" }, new[] { "06", "07" })`，两个集合长度不限；单巷道也统一传单元素数组或列表。
-- 创建时汇总各目标可进入空位减去在途预留的容量，只作为提示写入日志，不再整批拒绝：容量按派车进度逐件校验，暂缺容量的明细等待前面的货腾出位置。创建结果的 `RequiredCount` 和 `TargetCapacities` 返回待搬数量及创建时的容量快照。
-- 创建时只建立货物清单并校验目标总容量，不提前给所有货物分配目标巷道。每件货准备派车时，才按 `卸货目标并行组` 选择目标并预留一个容量名额；未找到车辆时不保留此次临时预留。
-- 派车后固定目标巷道，不在途中切换。取货完成后，取得目标巷道通行锁时才确定具体卸货货位，选择可进入的最深空位。
-- 先按 01 → 02 → 01 → 02 … 分配，某条无可用容量时跳过；01、02 均无容量后按 03 → 04 → 03 → 04 … 分配；03、04 均无容量后才使用 05。跨组时输出一次 `[卸货目标]` 日志。
-- 每组长度不限：当前为 2、2、1，也支持 `{01,02,03}` → `{04}` → `{05}`（3、1、1）。先轮流分配 01、02、03，第一组无可用容量后使用 04，再使用 05。只需修改 `script.cs` 的分组配置；批次目标列表仍决定本次允许使用哪些巷道。
-- 多个来源和目标之间可并行推进，但同一巷道的进出受通行锁保护；容量预留决定还能分配多少件，通行锁决定车辆何时可以进入。
-- 来源按 `取货优先级组` 决定派车先后：`06～15` 在 `16～25` 之前，组内按巷道轮询，某来源被占用不阻塞其他来源；每条内部从外向内取货，仍受并行上限约束。这一步只是排序，06～25 始终是同一个批次、同一条搬运流程。
-- 优先巷道暂时派不出车（车道被在途车辆占用、外侧货物未清、目标容量暂缺）时，空闲车辆直接接着派后续巷道的明细，不会空等、不会返程，也不会重新创建任务；只有所有巷道都派不出车时才等待。首次派到后续巷道时输出一次 `[取货顺序]` 日志。
-- 批次查询返回独立的来源、目标名称列表和查询时的目标容量快照。ScopeId 为名称逗号拼接，仅供展示；单值 TargetPocketKey 只在单目标时赋值，多目标调度使用 TargetPocketKeys。
-- 当前只允许一个未完成业务批次；已有其他未完成执行任务或清障队列时拒绝创建。
-- 巷道批次创建时记录当时来源货物的类型与编号，要求每个来源站点只有一件数量为 1 的货物，且类型与编号非空、组合全局唯一；不马上派车，后来新增货物不会自动加入原批次。
-- 调度按源巷道外侧到内侧挑选等待明细，核验原货物仍在计划站点，并检查外侧阻挡、源锁、并行名额、目标容量和可用车辆。进入取货巷道前、真正取货前再次核验类型与编号，取货后及卸货前后核验货物拥有者；异常进入 `NeedsReview`，不改搬其他货物。
-- 资源成立才关联 TaskInfo、占用取货巷道并派车；目标巷道此时可以被前车占用。
-- 创建、调度和业务查询使用 `cargoBatchSync` 协调共享状态。
-- 来源站点不存在或已无货、执行关联丢失或派车结果不确定时进入 `NeedsReview`，不擅自释放已占资源或重复派发。
-
-## 搬运状态机
-
-普通跨巷道搬运：
-
-```text
-None / 业务调度派车
-→ GoParkingExit（车辆从停车巷道出发时）
-→ GoPickEntrance → GoPick → Picking → Picked
-→ GoPickExit → GoDropEntrance → GoDrop → Dropping → Dropped
-→ 续单：直接前往下一件货物的取货巷道入口，成功后 Finished / 无可接任务：GoHome → Finished
-```
-
-- `Arrived` 同时检查 AGV 空闲和 `API.On == 目标Mark`，到入口后才发下一段指令，避免每秒采样漏掉快速经过的入口。
-- 取货、卸货和卸货入口检测统一使用 `StationActionFinished` 判断完成：`SimulateStationActions = true` 时按 `PickDropDelay`（当前10秒）仿真；false 时等待 `ActionState == "FINISHED"`。取放货完成后通过 `MoveToOtherArea` 同步软件货物归属。
-- `GetStationCargoArea` 从初始化生成的站点朝向映射获取货物区域，四个名称配置在 `script.cs` 的 `GarageDirectionAreas` 中。取货从起点对应区域转入 AGV 的 `车` 区域，卸货从 `车` 区域转入终点对应区域；例如 `车库位朝右 → 车 → 车库位朝上`。
-- 取放货时若站点不存在、不属于有效车库货位、未匹配朝向分类或匹配多个朝向分类，通过 `WaitReason` 输出原因，保持当前 `Picking` / `Dropping` 阶段，不执行本次转移，也不推进为完成。后续调度读取同一份配置缓存，修正分类后需重新加载脚本；不会自动回退使用 `车库位` 区域，也不另行校验宿主货物区域对象是否存在。
-- `Picked` 时申请卸货通行锁并确定可进入的卸货位，成功才离开取货位。失败则原地等待，继续持有取货锁。
-- 到取货出口释放取货锁，并在同轮下发去卸货入口的指令。后车此时可以取下一份货。
-- 卸完即在同一调度临界区尝试续单，不再经过卸货巷道出口：有可接任务时把卸货巷道锁交接给下一段任务，车辆从卸货位直接前往下一取货巷道入口；没有可接任务时直接回家，等车辆驶出卸货巷道后才登记该锁的 1 秒延迟解锁。续单或停车派车结果不确定时进入 `NeedsReview`，保留旧锁供现场核对。
-- 同巷道内部搬运直接去卸货位，持续持有同一通行锁，卸完直接续单或回家，车辆驶出该巷道后延迟释放。
-- 空车移动走 `GoMove → Finished`，不同于货物搬运流程。
-- 单纯移动只调用 `GoTo(mark)`；取货、卸货设置 `pick` / `drop` 动作。跨巷道搬运前往卸货入口时设置 `detectObject`，在 `GoDropEntrance` 确认到位、动作完成且 `DropReady` 通过后，才下发前往卸货位的 `drop` 动作。同巷道内部搬运不经过该入口检测。
-- 派车不要求 AGV 位于停车位：停车区外空闲且没有未完成任务、未执行停车流程的车也可参与分配；停车区内另需满足可出库条件。
-- 卸货完成后优先续接已有待派车搬运步骤（包括按依赖激活的清障步骤），再尝试巷道批次待取货明细。沿用指定车辆、货物身份、来源巷道锁、外侧阻挡、容量和并行名额等检查；续单限定使用当前车辆。续单成功后旧步骤成为 `Finished`，否则回家停车后才完成；停车不可用时保持 `Dropped` 和旧锁，原地等待停车位。查询、检查资源、绑定车辆与派车由 `cargoBatchSync` 串行协调。
-- 续单失败且批次暂无可派明细时，车辆照常返程停车；因为 06～25 都在同一批次的派车队列里，只要还有任意巷道能派车，续单就会直接成功，不需要回停车位再出车。
-
-## 容量预留与通行锁
-
-`DropCapacityReserved` 预留目标巷道容量，防止空位超分；`PocketLocks` 控制实际巷道通行，两者不可合并。
-
-- 动态任务通过 `DropPocketKey` 确定目标巷道；取得卸货锁后才填写具体 `ToMark`。
-- `DropSlots()` 从入口向内检查连续空位，排除被外侧货物挡住的内部空洞，再按深到浅选位。
-- 固定目标任务仍保留指定货位，动态任务不能抢占或挡住固定预留货位。
-- 卸货完成后解除容量预留，货位转为实际占用；卸货通行锁继续持有到出巷道。
-- 释放锁检查任务归属，并清空 TaskInfo 持锁字段，防止旧任务误删新任务的锁。
-
 ## AGV 动态停车和出库
 
 `LoadParkingLanes()` 从“agv停放点”识别物理巷道、深浅顺序及唯一入口。配置异常时输出原因并禁用相关停车安排。
@@ -314,62 +156,101 @@ None / 业务调度派车
 
 `parkingstaID` 仍用于初始化摆车；运行中回家不依赖固定 `homestaID`。停车区暂不可用时车辆保持当前位置等待，公共通道上的等待和拥堵仍依赖地图与宿主交管。
 
-## 查询和当前测试入口
+## 执行反馈、预约和巷道锁
 
-- `AddCargo(cargoName, cargoTag, stationMark)`：使用已配置的 `CargoInfo` 在空车库货位对应朝向的货物区添加数量为 1 的实体，并写入 Tag；不会自动新建货物类型。类型 + Tag 必须唯一。
-- `UpdateCargo(cargoName, cargoTag, newCargoName, newCargoTag)`：精确找到原货物，修改实体的 Info 和 Tag，保持所在站点。新类型必须已配置，新类型 + Tag 不得与其他实体重复；修改后的地图外观需现场验证。
-- `DeleteCargo(cargoName, cargoTag)`：通过实际父容器的 `CargoTake(info, 1)` 取走指定货物，不清空整个货位或删除托盘。为避免按类型取走其他实体，修改、删除要求该站点内仅有一件数量为 1 的指定货物。
-- 上述函数返回 `CargoEditResult`（`Success`、`Error`、`CargoName`、`CargoTag`、`StationMark`），共用调度锁；存在未完成任务、批次、清障队列或巷道锁时拒绝编辑。AGV 上或不属于有效车库货位的货物拒绝修改、删除。编号作为字符串原样保存，不自动补零。
-- 添加、修改、删除货物已由用户现场测试成功，临时 `TestCargoEditing()` 和两处 5 秒观察延迟已移除。初始化不再创建或删除 `990001/990002`，开发者注释区继续保留三个编辑函数调用示例。
-- `GetCargoTags(cargoName)`：按 `CargoInfo.Name` 精确筛选当前实体货物，返回非空、去重并按字符串顺序排序的 `List<string>` Tag 列表，可直接用于编号下拉框。示例：`var tags = GetCargoTags("迈巴赫");`，返回类似 `["000001", "000002"]`；参数为空或无匹配时返回空列表。包含站点及 AGV 上的货物，列表不代表当前可搬运，也不能用去重后的列表检测重复编号；创建搬运时仍核验类型与 Tag 的唯一性。
-- `CreateCargoMoveTask(cargoName, cargoTag, toMark, agvName = "00")`：按 `CargoInfo.Name` 与实体 `Cargo.Tag` 精确定位货物，自动取得源站点，再复用点到点搬运及两端清障。示例：`var result = CreateCargoMoveTask("迈巴赫", "000001", "41");`；检查 `result.Success`、`result.Error`，返回值还包含类型、Tag、实际起点和目标站点。成功表示任务已创建，不代表搬运完成。
-- 不同类型可使用相同 Tag，同一类型与 Tag 必须唯一。新入口要求源站点仅有一件数量为 1 的指定货物；无匹配、重复匹配、货物不在站点、已有未完成任务时拒绝创建。目标必须满足现有点到点货位、巷道及清障要求；`"00"` 自动选车，其他值指定 AGV 名称。
-- 所有搬运步骤（含障碍货物）记录 `CargoName/CargoTag` 并核验身份；障碍货物同样必须满足单件、非空且唯一的身份要求。货物被替换或位置不符时进入 `NeedsReview` 并保留资源等待核对。旧站点搬运公开入口及HTTP路由已删除，不再支持按起点站号接单。
-- `GetBatches()`：业务批次进度独立快照，最新在前。
-- `GetBatchDetail(batchId)`：返回独立快照，不存在返回 null。`Items` 包含货物类型、编号、来源、请求目标站点/巷道、实际卸货位 `AssignedDropMark`、状态及等待原因；`Steps` 包含所有已规划步骤（包括尚未激活的清障步骤），并提供 `TotalStepCount`、`CompletedStepCount`。巷道明细等待派车时步骤列表为空，派车后加入搬运步骤，具体卸货位确定前可为空。查询不会派车或推进状态。
-- 一条货物明细下所有步骤均达到 `Finished` 才计为完成：每步卸货完成后成功续接任务，或回家停车完成。不是仅卸货完成；清障步骤完成不代表目标货物已完成。
-- `HttpApi.cs` 当前仅映射 `/api/agvs`、`/api/tasks`，监听 `http://localhost:8088`。业务批次查询函数尚未映射为 HTTP 路由。
-- 当前初始化在 `LoadMapConfiguration()` 后，通过 `GetMapCategory(GarageArea)?.Children` 读取已缓存的“车库位”分类站点，调用 `ClearCargo()` 清空这些站点的全部货物区域，再逐行调用 `AddCargo("迈巴赫", 编号, 站点Mark)` 生成货物并打印全部货物位置，随后按 `parkingstaID` 摆车。无需手填清货站点列表，也不重新扫描地图；清货不删除站点本身。
-- “车库位”分类不存在时输出日志并跳过清货；没有货物区域的站点由 `ClearCargo()` 过滤。清货范围由“车库位”分类决定，不是地图中的所有站点。不能把重启脚本当作无副作用的恢复操作。
-- `script.cs` 初始化仍打印迈巴赫编号列表；搬运测试保留相邻两行 `TestPocketMoveBatchCreation(...)` 和 `TestCargoMoveCreation()`，轮流注释，只启用其中一行。当前启用单件测试，自动将迈巴赫 `000002` 搬到第一个可选空货位；没有空货位或创建失败时打印原因。更换单件测试货物时，在 `TestCargoMoveCreation()` 中修改类型和编号。
-- 两种测试共用立即调用及每 10 秒调用的 `TestCargoBatchQueries()`，打印批次进度、每件目标货物身份与目标位置，以及清障、暂存、最终搬运的逐步明细。开发者注释区已补充创建结果的批次/明细编号和详情字段；原位置打印定时器保留为注释。
-- 旧 `GenerateCargo()` 已移除，初始化改用 `AddCargo("迈巴赫", Tag, 站点Mark)`，根据站点朝向选择货物区并直接放置一件货物。宿主工程必须预先存在名称为“迈巴赫”的 `CargoInfo`；不随机生成货物或容器信息，也不创建托盘。
-- 初始化编号固定为 `000001` 至 `000012`，依次对应站点 `71、72、67、68、58、59、54、55、44、45、40、41`。初始化使用 12 行直接调用，不检查每行返回结果；需要查看失败原因时可接收 `CargoEditResult`。重新加载仍会清货并按该配置重新生成。
-- `TraceCargoLocations(cargoTag)` 使用 `API.Cargos` 枚举货物，通过 `API.GetOwner(cargo)` 判断顶层拥有者，并以 `[货物位置]` 日志输出货物 Tag、类型以及所在站点或 AGV。参数为空时输出全部货物，传入例如 `"000001"` 时只查询该货物；初始化添加完成后自动调用一次无参查询。
-- 并行执行上限当前为 4，调度周期 1000 ms。
+货位预约、容量预留和通行锁分别维护：预约防止动作争用货物和两端外侧访问货位，容量预留防止目标超分，`PocketLocks` 控制实际巷道通行。预约不等于获得巷道锁。
 
-## 已知边界与后续工作
+点到点派单原子预约货物、源目标及外侧访问货位（不含入口）。取货成功后释放不再需要的源端预约，保留货物及目标预约；放货成功后释放剩余预约。每次释放均核对原 TaskInfo 对象和任务归属。
 
-- 单件搬运和巷道搬运使用不同创建参数，但统一为业务批次、货物明细、执行步骤和查询接口；两者保留原有清障和动态卸货的执行策略，不强行采用同一种调度策略。
-- 业务前提是只有本系统控制的 AGV 搬货。两种搬运均按类型与 `Cargo.Tag` 核验身份；人工移动后不会自动重新寻址或重规划，而是暂停相关明细等待核对。批次查询返回独立数据快照，不暴露内部执行对象。
-- `Cargo.Tag` 是宿主货物对象的附加信息，本项目尚未对编号和位置做持久化；脚本重载会清货并重新编号，不能将该 Tag 当作跨重启不变的正式资产编号。
-- 业务批次、执行任务、预留和停车占用都在内存；没有持久化重启恢复。后续恢复应结合任务阶段、AGV 载货和货位状态核对。
-- 尚未提供完整的暂停、取消、NeedsReview 人工处理及恢复接口。
-- 尚未实现多业务批次并行、双向搬运循环等待检测和完整公平调度。
-- 停车位置记录依赖本脚本控制的初始化和进出流程，人工移车/外部指令后的自动对账尚未实现。
-- 既往现场已反馈入口分段、搬运重叠、动态停车效果正常；不能视为所有异常和多车场景均已验证。
+普通跨巷道执行流程：
 
-## 编译与验证
+```text
+派车 → GoParkingExit（如适用）
+→ GoPickEntrance → GoPick → Picking → Picked
+→ GoPickExit → GoDropEntrance → GoDrop → Dropping → Dropped
+→ 成功续单后 Finished，或 GoHome → 停车完成后 Finished
+```
 
-README 是文档，不加入 csproj 的 `Compile` 项；`project.config` 的 `CompileFilter` 加入 `*.md`，避免宿主将其作为待编译文本。
+项目保留现有物理执行流程：取货后仍需驶到源入口才登记延迟解锁，不采用仿真器的“Pickup 完成即解源锁”。锁释放统一至少延迟 1 秒，实际释放受每秒轮询影响。目标锁在取货完成后的卸货准入阶段申请。
 
-该项目依赖宿主 DLL 和 Windows/.NET 环境。可通过软件重新加载脚本编译；也可使用本机 Roslyn C# 编译器，引用宿主 DLL、.NET 6、ASP.NET Core 和 WindowsDesktop 程序集，对本目录全部 `.cs` 做库编译检查。单纯编译不会验证现场地图或车辆动作，也不要以运行 `Main()` 的方式做无副作用测试。
+跨巷道前往目标入口带 `detectObject`，到位、动作完成且卸货准入通过后才下发 drop；同巷道直接前往目标位并持续持锁。卸完优先续单，不额外经过目标出口；成功后把旧目标锁交接到下一段任务，确认驶出后才延迟释放。无可接任务则动态停车，停车暂不可用时保留锁等待。锁释放和交接检查归属。
 
-初始化复用地图缓存清空全部车库位货物、随后生成指定测试货物的调整已通过编译，用户已反馈效果可用；该反馈仅覆盖此次初始化清货调整。
+点到点取放前及完成反馈时复核货物、预约、锁、No-hole 和未来客户保护；反馈成功才同步库存及进度。指令异常或归属不符进入 `NeedsReview`，不自动释放尚需核对的资源或重复派发；客户已完成的状态不因车辆收尾异常撤销。
 
-本次单件/巷道搬运统一批次、货物明细和步骤查询，以及货物身份核验的改动已通过全部 C# 脚本编译检查。现场还需轮流验证：带障碍的点到点是否完整返回并串行执行清障/暂存/最终搬运步骤，巷道搬运是否正确返回货物身份和动态目标，以及步骤完成数与目标货物完成数是否一致。编译通过不代表现场动作已经验证。
+`SimulateStationActions = true` 时，取货、放货和入口检测按 `PickDropDelay`（当前 10 秒）仿真；false 时等待 `ActionState == "FINISHED"`，无延时成功兜底。入口检测仿真计时从前往入口指令下发开始，包含行驶时间。
 
-多巷道搬运还需现场验证：同组目标的顺序轮转（首件进 01、次件进 02）、组内装满后转向下一组、某来源被占用时其他来源继续派发。来源顺序还需验证：06～15 优先派车，06～15 暂时派不出时车辆直接续接 16～25，全程一个批次、不返程、不重建任务；容量小于待搬数量时批次能创建成功，并在派车时逐件等待空位。隔离验证不能替代现场地图和车辆联调。
+实机对接层应在新动作开始时更新／复位 ActionState，避免沿用上一动作结果。当前脚本通过 `MoveToOtherArea` 同步软件货物归属，对接层不应重复转移；软件校验不等于实物检测。路线执行、路口冲突和安全避障依赖宿主及车辆控制系统。
 
-修改调度后重点验证：前车卸货与后车取货重叠；卸货占用时在取货位等待；入口释放归属；容量不足不超派；外侧先出库、深处可达空位优先停车；批次异常暂停和完成统计。
+## 查询、编号与完成时间
 
-现场需确认 `01`～`25` 分类及其站点配置，检查启动配置日志，验证不同朝向库位之间的取放货、目标区域中的货物显示朝向，以及朝向分类缺失或重复时保持等待的行为。地图配置缓存及朝向取放货尚未完成现场运行验证。
-  
+`GetBatches()` 返回最新在前的批次快照；`GetBatchDetail(batchId)` 返回明细及执行步骤快照，不存在返回 null。查询不推进状态。
 
-## 仿真与实机站点动作完成判断
+| 字段 | 含义 |
+| --- | --- |
+| `BatchId` | 一次接收的业务批次 GUID |
+| `ItemId` | 一条客户货物明细的 GUID |
+| `TaskNo` | 调用方填写的客户任务号 |
+| `Steps[].TaskId` | 一次实际搬运的执行编号 |
+| `Steps[].Sequence` | 明细内执行步骤顺序 |
+| `ExecutionTaskId` | 点到点最近一次实际搬运编号；追踪完整过程查看 Steps |
+| `CargoTag` | 与类型共同识别货物的字符串编号 |
 
-在 script.cs 中配置 SimulateStationActions：默认 true，仿真使用 PickDropDelay（当前10秒）；实机运行前改为 false，取货和卸货均等待车辆 ActionState 等于 FINISHED 后才转移软件货物并进入下一状态，保留现有货物身份、站点和归属校验。实机模式没有延时成功兜底。VDA对接层必须在新动作开始时更新或复位 ActionState，避免沿用上一动作的 FINISHED。该开关不改变HTTP API入参或返回结构。
+点到点 `Items[].Steps` 是已派发搬运历史，不是候选清单或预先规划的完整队列。`PointAction` 标识动作类型，`PointDropCompleted/DropoffCompletedTime` 记录放货反馈。FINALIZE 记录在客户 `CompletionAction`，不伪造车辆步骤。步骤类型包含 `Clearance`、`Staging`、`TargetMove`、`Filling`。
 
-取货来源身份和批次校验、卸货前车载货物归属校验统一在下发 pick/drop 动作前执行。动作完成后不再要求源货位有货或货物仍在车上，只同步软件货物归属，并检查转移后的归属。这些校验检查软件记录，不代表实物检测；当前仍由脚本调用 MoveToOtherArea 同步归属，VDA不应重复转移软件货物。
+点到点客户在正式搬运最终目标放货完成，或 FINALIZE 确认时完成。Relocation、Filling 不直接完成所属客户。`CompletedCount` 是客户完成数，与 `CompletedStepCount` 不同。
 
-卸货入口 detectObject 使用相同完成判断，不新增任务状态或HTTP API字段。仿真入口检测延时从前往入口的指令下发时开始计时（包含行驶时间）；实机等待本次动作的 FINISHED，不解析额外检测结果。
+| 时间 | 点到点模式含义 |
+| --- | --- |
+| 明细 `CompletedTime` | 此客户完成时刻 |
+| 批次 `CustomerCompletedTime` | 最后一个客户完成时刻 |
+| 批次 `CompletedTime` | 已派步骤 Finished、预约及货物巷道锁收尾完成的时刻 |
+
+客户全部完成而车辆尚未收尾时，显示“客户完成，车辆收尾中”。整巷模式沿用原有完成统计，客户与步骤的完成边界不能直接套用点到点规则。目前未新增 `SystemMakespan` 指标。
+
+## 货物管理和 HTTP 接口
+
+- `GetCargoTags(cargoName)`：返回此类型当前非空、去重、排序后的编号，含车载货物；列表不代表可搬运。
+- `TraceCargoLocations(cargoTag)`：输出指定编号位置，不传参输出全部货物。
+- `AddCargo(cargoName, cargoTag, stationMark)`：在空货位对应朝向区域添加一件货物，类型需预先配置。
+- `UpdateCargo(cargoName, cargoTag, newCargoName, newCargoTag)`：修改类型及编号，位置不变。
+- `DeleteCargo(cargoName, cargoTag)`：删除指定单件实体，不清空整站。
+- 货物编辑返回 `CargoEditResult`；存在未完成任务、批次、清障队列或巷道锁时拒绝。修改和删除要求货物唯一、数量为 1 且位于有效货位，拒绝编辑车载货物。
+- `GetSelectableStations(true/false)`：查询有货／空货位，不等于当前可派车或可直接放入。
+- `CreateMoveTask(toMark, agvName = "00")`：空车移动。
+
+HTTP 服务当前监听 `http://*:8088`，启用 CORS。路由以 `HttpApi.cs` 为准：
+
+| 方法 | 路由 | 用途 |
+| --- | --- | --- |
+| GET | `/api/agvs`、`/api/tasks` | 车辆和执行任务 |
+| GET / POST | `/api/agvFaults` | 故障查询／上报 |
+| POST | `/api/agvFaults/clear` | 清除故障记录 |
+| GET | `/api/pockets` | 巷道列表 |
+| POST | `/api/createPocketMoveBatch` | 整巷批次接单 |
+| GET | `/api/batches`、`/api/batchDetail` | 批次列表和详情 |
+| POST | `/api/createMoveTask` | 空车移动 |
+| GET | `/api/cargoTypes`、`/api/cargos`、`/api/cargoStations` | 货物及站点查询 |
+
+点到点列表接单、候选预览和货物增删改目前为内部函数，不能把 C# 示例当成已有 HTTP 路由。`script.cs` 注释区保留后续 API 接入示例。
+
+## 初始化与当前测试
+
+`Init()` 先加载地图配置，清空“车库位”分类站点的全部货物区域，再按 `script.cs` 中启用的 AddCargo 调用生成测试货物、输出位置并初始化 AGV 停车。当前具体货物编号、位置及分组均以代码为准，不在文档重复维护固定清单。重新加载会执行这些初始化动作。
+
+当前启用 `TestCargoMoveCreation()`，在 `TaskCreator.cs` 中一次提交五条点到点任务。货物类型、编号和具体最终目标 Mark 在函数任务列表中填写；目的巷道按当前测试地图选择 01～04，五个最终货位不得重复。默认按列表顺序考虑、立即释放、自动选车；必填配置不完整时不提交。日志输出接收结果、硬前置、初始候选和等待原因。
+
+整巷测试通过相邻的 `TestPocketMoveBatchCreation(...)` 调用切换，只启用一种。`script.cs` 调用旁的旧单件直搬注释已过时，实际以测试函数内容为准。两种模式共用 `TestCargoBatchQueries()`，启动时及每 10 秒打印进度。并行上限当前 4，调度周期 1000 ms。
+
+用户已反馈点到点直搬、源端／目标端清障、填充、同巷道暂存、FINALIZE、多车并行、优先级及释放时间、目标深浅前置、客户货物清障和未来货物保护、来源锁受阻跳过等测试通过；最近五件点到点测试通过，整巷回归反馈无影响。该反馈覆盖已执行场景，不表示所有异常和现场组合均已验证。点到点功能现阶段暂告一段落。
+
+## 已知边界与验证方式
+
+- 批次、执行步骤、预约及停车占用均在内存，未实现持久化重启恢复；Cargo.Tag 也未做跨重启资产持久化。
+- 未提供完整暂停、取消、NeedsReview 人工处置及恢复接口。
+- 未实现多业务批次并行、完整公平调度或自动死锁报告；没有可派候选时仍可能持续等待。
+- 点到点计划下一动作时查询实时货位；在执行中发生人工移货、外部指令或归属变化，可能转入 NeedsReview。停车记录也没有完整外部移车自动对账。
+- 运行期间不支持地图／分类在线刷新，修改后需在核对现场状态后重新加载脚本。
+
+工程依赖本机 ProfControl DLL、Windows/.NET 环境，可通过宿主重新加载编译，也可用 Roslyn 配合宿主及 .NET 引用编译全部 C# 源码。单纯编译不验证地图或车辆行为；不要把执行 Init/Main 当成无副作用检查。
+
+此前点到点改动已通过全项目编译和临时隔离验证；临时验证工具不在仓库，不提供已删除 tests 目录的运行命令。README 不加入 csproj 的 Compile 项，宿主文本过滤配置见 `project.config`。
