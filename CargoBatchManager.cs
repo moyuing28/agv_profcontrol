@@ -459,8 +459,7 @@ namespace ProfControl
                 ReviewCargoItem(batch, item, "来源货位已不属于原巷道");
                 return;
             }
-            var gates = entrances.Marks;
-            if (sourceStations.Skip(sourceIndex + 1).Any(s => !gates.Contains(s.Mark) && !s.IsEmpty()))
+            if (sourcePocket.Slots.SkipWhile(s => s.Mark != item.SourceMark).Skip(1).Any(s => !s.IsEmpty()))
             {
                 SetCargoItemWaiting(item, "等待外侧货物搬离");
                 return;

@@ -41,18 +41,14 @@ namespace ProfControl
         }
 
         //站点 Mark -> 巷道子分类名称；用于货物管理页面显示「所属巷道」。
-        // 与 /api/pockets 同一套口径：车库位分类 ∩ 该巷道分类，并排除入口站。
+        // 与 /api/pockets 同一套口径：车库位分类 ∩ 该巷道分类，入口兼作库位时同样包含。
         Dictionary<string, string> GetStationPocketMap()
         {
             var map = new Dictionary<string, string>();
             var garageSub = SubCategoryCollection.Instance[GarageArea] as ISubCategory;
-            var entranceSub = SubCategoryCollection.Instance["入口"] as ISubCategory;
             var garageMarks = garageSub == null
                 ? new HashSet<string>()
                 : new HashSet<string>(garageSub.Children.Cast<IStation>().Select(s => s.Mark));
-            var entranceMarks = entranceSub == null
-                ? new HashSet<string>()
-                : new HashSet<string>(entranceSub.Children.Cast<IStation>().Select(s => s.Mark));
 
             foreach (var pocketName in 巷道子分类名称)
             {
@@ -69,7 +65,6 @@ namespace ProfControl
                     {
                         if (!garageMarks.Contains(station.Mark)) continue;
                         if (!pocketMarks.Contains(station.Mark)) continue;
-                        if (entranceMarks.Contains(station.Mark)) continue;
                         if (!map.ContainsKey(station.Mark)) map[station.Mark] = pocketName;
                     }
                 }
@@ -216,13 +211,9 @@ namespace ProfControl
                 {
                     var arr = new JArray();
                     var garageSub = SubCategoryCollection.Instance[GarageArea] as ISubCategory;
-                    var entranceSub = SubCategoryCollection.Instance["入口"] as ISubCategory;
                     var garageMarks = garageSub == null
                         ? new HashSet<string>()
                         : new HashSet<string>(garageSub.Children.Cast<IStation>().Select(s => s.Mark));
-                    var entranceMarks = entranceSub == null
-                        ? new HashSet<string>()
-                        : new HashSet<string>(entranceSub.Children.Cast<IStation>().Select(s => s.Mark));
 
                     //同一个子分类下可能有多条物理巷道，这里按子分类名称聚合，
                     // 保证返回的巷道名称唯一，前端可以直接用它做勾选列表的 key。
@@ -243,8 +234,7 @@ namespace ProfControl
                         {
                             var stations = pocket.OrderStations
                                 .Where(s => garageMarks.Contains(s.Mark) &&
-                                            pocketMarks.Contains(s.Mark) &&
-                                            !entranceMarks.Contains(s.Mark))
+                                            pocketMarks.Contains(s.Mark))
                                 .ToList();
                             if (stations.Count == 0) continue;
 
@@ -521,13 +511,9 @@ namespace ProfControl
                     catch (Exception ex) { Tools.trace($"[站点视图] 货物读取失败：{ex.Message}"); }
 
                     var garageSub = SubCategoryCollection.Instance[GarageArea] as ISubCategory;
-                    var entranceSub = SubCategoryCollection.Instance["入口"] as ISubCategory;
                     var garageMarks = garageSub == null
                         ? new HashSet<string>()
                         : new HashSet<string>(garageSub.Children.Cast<IStation>().Select(s => s.Mark));
-                    var entranceMarks = entranceSub == null
-                        ? new HashSet<string>()
-                        : new HashSet<string>(entranceSub.Children.Cast<IStation>().Select(s => s.Mark));
 
                     var emitted = new HashSet<string>();
                     foreach (var pocketName in 巷道子分类名称)
@@ -543,8 +529,7 @@ namespace ProfControl
                         {
                             var stations = pocket.OrderStations
                                 .Where(s => garageMarks.Contains(s.Mark) &&
-                                            pocketMarks.Contains(s.Mark) &&
-                                            !entranceMarks.Contains(s.Mark))
+                                            pocketMarks.Contains(s.Mark))
                                 .ToList();
 
                             foreach (var station in stations)

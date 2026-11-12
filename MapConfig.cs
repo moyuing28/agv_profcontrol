@@ -76,7 +76,7 @@ namespace ProfControl
             {
                 foreach (var station in garage.Children)
                     stationPocketKeys[station.Mark] = station.BelongPocketLines.FirstOrDefault()?.OrderStations.FirstOrDefault()?.Mark;
-                foreach (var station in garage.Children.Where(s => !gates.Contains(s.Mark)))
+                foreach (var station in garage.Children)
                 {
                     var areas = GarageDirectionAreas.Where(a => CategoryMarks(a).Contains(station.Mark)).ToList();
                     if (areas.Count == 1)
@@ -110,11 +110,14 @@ namespace ProfControl
                     {
                         Key = key,
                         Stations = stations,
-                        Slots = stations.Where(s => garage.Marks.Contains(s.Mark) && !gates.Contains(s.Mark)).ToList(),
+                        Slots = stations.Where(s => garage.Marks.Contains(s.Mark)).ToList(),
                         Entrance = entrances.Count == 1 ? entrances[0] : null,
                         Error = entrances.Count == 1 ? null : $"巷道 {key} 入口不唯一（数量={entrances.Count}）"
                     };
                     if (config.Slots.Count == 0) config.Error = $"巷道 {key} 没有车库货位";
+                    if (config.Slots.Any(s => s.Mark == config.Entrance) &&
+                        config.Slots.Last().Mark != config.Entrance)
+                        config.Error = $"巷道 {key} 的入口库位必须是最外侧库位";
                     if (config.Slots.Select(s => s.Mark).Distinct().Count() != config.Slots.Count)
                         config.Error = $"巷道 {key} 包含重复货位";
                     cargoPockets.Add(key, config);
@@ -167,11 +170,11 @@ namespace ProfControl
                 error = $"找不到巷道子分类 {name}，或缺少车库位、入口分类";
                 return false;
             }
-            var stations = category.Children.Where(s => garage.Marks.Contains(s.Mark) && !entrances.Marks.Contains(s.Mark)).ToList();
+            var stations = category.Children.Where(s => garage.Marks.Contains(s.Mark)).ToList();
             var pockets = stations.SelectMany(s => s.BelongPocketLines).Distinct().ToList();
             if (stations.Count == 0 || pockets.Count != 1)
                 error = $"子分类 {name} 必须对应一条明确的货物巷道";
-            else if (pockets[0].OrderStations.Any(s => garage.Marks.Contains(s.Mark) && !entrances.Marks.Contains(s.Mark) && !category.Marks.Contains(s.Mark)))
+            else if (pockets[0].OrderStations.Any(s => garage.Marks.Contains(s.Mark) && !category.Marks.Contains(s.Mark)))
                 error = $"子分类 {name} 未包含该巷道的全部车库货位，请检查分类配置";
             else
             {

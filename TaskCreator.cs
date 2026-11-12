@@ -269,7 +269,6 @@ namespace ProfControl
             var garageSub = GetMapCategory(GarageArea);
             if (garageSub == null) return false;
 
-            var entranceSub = GetMapCategory("入口");
             var destinationPocketKey = destinationPocket.OrderStations.FirstOrDefault()?.Mark;
             var targetPocketKey = targetPocket.OrderStations.FirstOrDefault()?.Mark;
             var reservedMarks = new HashSet<string>();
@@ -279,8 +278,7 @@ namespace ProfControl
 
             var pickBlockingStations = targetStations
                 .Skip(targetIndex + 1)
-                .Where(s => entranceSub == null ||
-                            !entranceSub.Marks.Contains(s.Mark))
+                .Where(s => garageSub.Marks.Contains(s.Mark))
                 .Where(s => !s.IsEmpty())
                 .Reverse()
                 .ToList();
@@ -289,7 +287,7 @@ namespace ProfControl
             var destinationIndex = destinationStations.FindIndex(s => s.Mark == toMark);
             if (destinationIndex < 0) return false;
             var dropBlockingStations = destinationStations.Skip(destinationIndex + 1)
-                .Where(s => entranceSub == null || !entranceSub.Marks.Contains(s.Mark))
+                .Where(s => garageSub.Marks.Contains(s.Mark))
                 .Where(s => s.Mark != targetMark && !s.IsEmpty()).Reverse().ToList();
             var blockingMarks = new HashSet<string>(pickBlockingStations.Concat(dropBlockingStations).Select(s => s.Mark));
             var blockingStations = targetPocketKey == destinationPocketKey

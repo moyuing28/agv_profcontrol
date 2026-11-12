@@ -52,6 +52,8 @@ namespace ProfControl
                         case TaskStatus.GoPick:
                             if (Arrived(info, info.FromMark))
                             {
+                                // 入口库位直接 pick 时，也在到达入口后回收上一段卸货锁。
+                                if (info.FromMark == info.PickEntranceMark) RecyclePendingDropLock(info);
                                 info.Status = TaskStatus.Picking;
                                 info.StateTime = DateTime.Now;
                             }
@@ -82,6 +84,11 @@ namespace ProfControl
                             if (!Arrived(info, info.FromMark) || !DropReady(info)) break;
                             if (info.SamePocket)
                                 MoveStage(info, info.ToMark, "drop", TaskStatus.GoDrop);
+                            else if (info.FromMark == info.PickEntranceMark)
+                            {
+                                ReleaseLock(info, true);
+                                MoveToDrop(info);
+                            }
                             else
                                 MoveStage(info, info.PickEntranceMark, TaskStatus.GoPickExit);
                             break;
@@ -90,7 +97,7 @@ namespace ProfControl
                             if (Arrived(info, info.PickEntranceMark))
                             {
                                 ReleaseLock(info, true);
-                                MoveStage(info, info.DropEntranceMark, "detectObject", TaskStatus.GoDropEntrance);
+                                MoveToDrop(info);
                             }
                             break;
 
@@ -494,9 +501,24 @@ namespace ProfControl
             MoveStage(info, mark, status);
         }
 
+        // 最外侧库位同时作为入口时，直接下发 drop；深处库位仍先做入口检测。
+        void MoveToDrop(TaskInfo info)
+        {
+            if (info.ToMark == info.DropEntranceMark)
+                MoveStage(info, info.ToMark, "drop", TaskStatus.GoDrop);
+            else
+                MoveStage(info, info.DropEntranceMark, "detectObject", TaskStatus.GoDropEntrance);
+        }
+
         // 单纯移动只下发目的地，不设置站点动作。
         void MoveStage(TaskInfo info, string mark, TaskStatus status)
         {
+            // 覆盖普通派车、续单及停车出库恢复，不重复向入口库位下发普通移动。
+            if (status == TaskStatus.GoPickEntrance && mark == info.FromMark)
+            {
+                MoveStage(info, mark, "pick", TaskStatus.GoPick);
+                return;
+            }
             info.WorkAgv.GoTo(mark);
             info.Status = status;
             info.LastWaitReason = null;

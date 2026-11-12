@@ -34,15 +34,19 @@ namespace ProfControl
             var assigned = new HashSet<string>();
             foreach (var pocket in sub.Children.OfType<IStation>().SelectMany(s => s.BelongPocketLines).Distinct())
             {
-                var laneSlots = pocket.OrderStations.Where(s => slots.Contains(s.Mark) && !entrances.Contains(s.Mark)).Select(s => s.Mark).ToList();
+                // 入口可以兼作最外侧停车位，必须参与占用、阻挡及出库筛选。
+                var laneSlots = pocket.OrderStations.Where(s => slots.Contains(s.Mark)).Select(s => s.Mark).ToList();
                 var laneGates = pocket.OrderStations.Where(s => entrances.Contains(s.Mark)).Select(s => s.Mark).Distinct().ToList();
-                if (laneSlots.Count == 0 || laneGates.Count != 1 || laneSlots.Any(assigned.Contains))
+                var gateInsideSlots = laneGates.Count == 1 && laneSlots.Contains(laneGates[0]) &&
+                    laneSlots.Last() != laneGates[0];
+                if (laneSlots.Count == 0 || laneGates.Count != 1 || laneSlots.Any(assigned.Contains) || gateInsideSlots)
                 {
                     Tools.trace($"[停车配置明细] 深处到门口={string.Join(" -> ", pocket.OrderStations.Select(s => s.Mark))}, 停放点={string.Join(",", laneSlots)}, 入口={string.Join(",", laneGates)}, 重复停放点={string.Join(",", laneSlots.Where(assigned.Contains))}");
                     parkingLanes.Clear();
-                    var reason = laneSlots.Count == 0 ? "该巷道没有有效停放点（检查是否全部也被标为入口）" :
+                    var reason = laneSlots.Count == 0 ? "该巷道没有有效停放点" :
                         laneGates.Count == 0 ? "该巷道站点列表内没有属于入口分类的点" :
-                        laneGates.Count > 1 ? "该巷道有多个入口点，无法确定进出口" : "停放点同时被识别到多条巷道";
+                        laneGates.Count > 1 ? "该巷道有多个入口点，无法确定进出口" :
+                        gateInsideSlots ? "入口停车位必须是最外侧停车位" : "停放点同时被识别到多条巷道";
                     Tools.trace($"[停车配置] {reason}，暂停动态停车及受影响停车位派车");
                     return;
                 }
@@ -50,7 +54,7 @@ namespace ProfControl
                 foreach (var slot in laneSlots) assigned.Add(slot);
                 Tools.trace($"[停车配置] 入口={laneGates[0]}, 深处到外侧={string.Join(" -> ", laneSlots)}");
             }
-            if (slots.Except(entrances).Any(s => !assigned.Contains(s)))
+            if (slots.Any(s => !assigned.Contains(s)))
             {
                 parkingLanes.Clear();
                 Tools.trace("[停车配置] 部分停放点没有识别到巷道，暂停动态停车");

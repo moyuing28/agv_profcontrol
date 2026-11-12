@@ -104,7 +104,7 @@ namespace ProfControl
                     i.CargoName == cargoName && i.CargoTag == cargoTag);
         }
 
-        // 含源/目标位本身及其外侧货位，不含入口；入口通行仍由现有巷道锁负责。
+        // 含源/目标位本身及其外侧货位；入口兼作库位时同样预约，独立入口不在 Slots 中。
         HashSet<string> PointAccessMarks(CargoPocketConfig pocket, string mark)
         {
             var index = pocket.Slots.FindIndex(s => s.Mark == mark);

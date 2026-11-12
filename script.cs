@@ -146,10 +146,10 @@ namespace ProfControl
             // ===== 当前测试：切换时直接注释调用，不使用开关变量 =====
             var testCargoTags = GetCargoTags("迈巴赫");
             Tools.trace($"[货物编号查询测试] 类型=迈巴赫，编号数量={testCargoTags.Count}，编号列表=[{string.Join(", ", testCargoTags)}]");
-            // TestPocketMoveBatchCreation(
-            // new[] { "07", "08", "09", "10", "11", "12", "13", "14", "15", "17", "18", "19", "20", "21", "22", "23", "24", "25", },
-            // new[] { "01", "02", "03", "04"});
-            TestCargoMoveCreation(); // 单件跨巷道直搬：自动选最外侧货物及异巷道合法放货位，只提交一条；与整巷测试二选一。
+ TestPocketMoveBatchCreation(
+ new[] { "07", "08", "09", "10", "11", "12", "13", "14", "15", "17", "18", "19", "20", "21", "22", "23", "24", "25", },
+ new[] { "01", "02", "03", "04"});
+//            TestCargoMoveCreation(); // 单件跨巷道直搬：自动选最外侧货物及异巷道合法放货位，只提交一条；与整巷测试二选一。
             TestCargoBatchQueries(); // 两种搬运共用同一批次详情查询。
             StartScheduler();
             // 查询测试：每 10 秒输出最新状态，不需要时直接注释这一行。
@@ -208,4 +208,4 @@ namespace ProfControl
 
 
 
-                                                      
+                                                                   
