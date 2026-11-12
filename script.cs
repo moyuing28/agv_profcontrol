@@ -3,6 +3,7 @@ namespace ProfControl
     public partial class SampleProject : IAppScript
     {
         #region 参数配置
+        const string CommodityCargoName = "商品车"; // 宿主统一货物类型，调用方仅传编号。
         const int MaxParallelMoveTask = 4; // 允许前车卸货、后车取货重叠
         // true：仿真按延时完成站点动作（取货、卸货、入口检测）；false：实机等待VDA动作完成反馈。
         const bool SimulateStationActions = true;
@@ -56,37 +57,37 @@ namespace ProfControl
                 ClearCargo(garageStations);
             else
                 Tools.trace("[初始化清货] 未找到车库位分类，跳过清货");
-            // 初始化货物：类型、编号、站点。
-//            AddCargo("迈巴赫", "000001", "71");
-//            AddCargo("迈巴赫", "000002", "72");
-            AddCargo("迈巴赫", "000003", "67");
-            AddCargo("迈巴赫", "000004", "68");
-            AddCargo("迈巴赫", "000005", "58");
-            AddCargo("迈巴赫", "000006", "59");
-            AddCargo("迈巴赫", "000007", "54");
-            AddCargo("迈巴赫", "000008", "55");
-            AddCargo("迈巴赫", "000009", "44");
-            AddCargo("迈巴赫", "000010", "45");
-            AddCargo("迈巴赫", "000011", "40");
-            AddCargo("迈巴赫", "000012", "41");
-            AddCargo("迈巴赫", "000013", "36");
-            AddCargo("迈巴赫", "000014", "37");
-            AddCargo("迈巴赫", "000015", "24");
-            AddCargo("迈巴赫", "000016", "25");
-            AddCargo("迈巴赫", "000017", "15");
-            AddCargo("迈巴赫", "000018", "19");
-            AddCargo("迈巴赫", "000019", "32");
-            AddCargo("迈巴赫", "000020", "8");
-//            AddCargo("迈巴赫", "000021", "73");
-            AddCargo("迈巴赫", "000022", "69");
-            AddCargo("迈巴赫", "000023", "60");
-            AddCargo("迈巴赫", "000024", "56");
-            AddCargo("迈巴赫", "000025", "46");
-            AddCargo("迈巴赫", "000026", "42");
-            AddCargo("迈巴赫", "000027", "38");
-            AddCargo("迈巴赫", "000028", "26");
-            AddCargo("迈巴赫", "000029", "21");
-            AddCargo("迈巴赫", "000030", "10");
+            // 初始化商品车：编号、站点。
+//            AddCargo("000001", "71");
+//            AddCargo("000002", "72");
+            AddCargo("000003", "67");
+            AddCargo("000004", "68");
+            AddCargo("000005", "58");
+            AddCargo("000006", "59");
+            AddCargo("000007", "54");
+            AddCargo("000008", "55");
+            AddCargo("000009", "44");
+            AddCargo("000010", "45");
+            AddCargo("000011", "40");
+            AddCargo("000012", "41");
+            AddCargo("000013", "36");
+            AddCargo("000014", "37");
+            AddCargo("000015", "24");
+            AddCargo("000016", "25");
+            AddCargo("000017", "15");
+            AddCargo("000018", "19");
+            AddCargo("000019", "32");
+            AddCargo("000020", "8");
+//            AddCargo("000021", "73");
+            AddCargo("000022", "69");
+            AddCargo("000023", "60");
+            AddCargo("000024", "56");
+            AddCargo("000025", "46");
+            AddCargo("000026", "42");
+            AddCargo("000027", "38");
+            AddCargo("000028", "26");
+            AddCargo("000029", "21");
+            AddCargo("000030", "10");
             TraceCargoLocations();
 
             //用于显示小车执行的任务类型及相关类型下的机器人状态
@@ -110,18 +111,17 @@ namespace ProfControl
 
             // ===== 留给后续 API 接入的内部函数示例，请保留注释 =====
             // CreateMoveTask("53", "20"); // 空车移动：目标站点 Mark、车辆名称；"00" 自动选车。
-            // var cargoTags = GetCargoTags("迈巴赫"); // 按货物类型查询编号下拉列表，返回 List<string>，例如 "000001"、"000002"；无匹配时为空列表。
-            // var mercedesTags = GetCargoTags("梅赛德斯"); // 换一个类型，只返回该类型的非空、去重、排序后的 Tag；包含站点和 AGV 上的货物。
-            // var addResult = AddCargo("迈巴赫", "000013", "目标空货位Mark"); // 在对应朝向区域添加一件货物；类型需预先配置，类型 + Tag 不得重复。
-            // var editResult = UpdateCargo("迈巴赫", "000013", "梅赛德斯", "000008"); // 原类型、原Tag、新类型、新Tag；保持当前站点。
-            // var deleteResult = DeleteCargo("梅赛德斯", "000008"); // 删除指定实体货物，不清空整站或删除托盘。
+            // var cargoTags = GetCargoTags(); // 查询商品车编号下拉列表，返回 List<string>，例如 "000001"、"000002"；无匹配时为空列表。
+            // var addResult = AddCargo("000013", "目标空货位Mark"); // 在对应朝向区域添加一件货物；宿主需配置商品车类型，Tag 不得重复。
+            // var editResult = UpdateCargo("000013", "000008"); // 原编号、新编号；保持当前站点。
+            // var deleteResult = DeleteCargo("000008"); // 删除指定实体货物，不清空整站或删除托盘。
             // addResult/editResult/deleteResult 的 Success、Error 表示操作结果；CargoName、CargoTag、StationMark 返回货物信息。
             // 货物编辑要求当前没有未完成任务/批次/巷道锁，修改和删除只允许站点内唯一的一件货物；拒绝编辑 AGV 上的货物。
             // var cargoResult = CreateCargoMoveTask(new[]
             // {
-            //     new CargoMoveRequest { TaskNo = "T001", CargoName = "迈巴赫", CargoTag = "000001", ToMark = "目标货位Mark1", Priority = 0 },
-            //     new CargoMoveRequest { TaskNo = "T002", CargoName = "迈巴赫", CargoTag = "000002", ToMark = "目标货位Mark2", Priority = 1 }
-            // }); // 单件传一条，多件传多条；按类型 + Tag 查询实时起点，CargoTag 可选自 cargoTags。
+            //     new CargoMoveRequest { TaskNo = "T001", CargoTag = "000001", ToMark = "目标货位Mark1", Priority = 0 },
+            //     new CargoMoveRequest { TaskNo = "T002", CargoTag = "000002", ToMark = "目标货位Mark2", Priority = 1 }
+            // }); // 单件传一条，多件传多条；按商品车编号查询实时起点，CargoTag 可选自 cargoTags。
             // CargoMoveRequest.AgvName 默认 "00" 自动选车；Priority 越小越优先，同值按提交顺序。
             // ReleaseTime 不填表示立即释放；PredecessorTaskNos 默认空，当前业务无需填写；目标巷道深浅前置自动建立。
             // cargoResult.Success / cargoResult.Error：整批接收结果和失败原因；成功只表示已登记，最近一轮主调度再派车。
@@ -144,8 +144,8 @@ namespace ProfControl
             // 两种搬运模式暂不混跑，也不向未结束点到点批次追加任务。预约、锁、派车和反馈函数属于内部调度，不作为 API 接单入口。
 
             // ===== 当前测试：切换时直接注释调用，不使用开关变量 =====
-            var testCargoTags = GetCargoTags("迈巴赫");
-            Tools.trace($"[货物编号查询测试] 类型=迈巴赫，编号数量={testCargoTags.Count}，编号列表=[{string.Join(", ", testCargoTags)}]");
+            var testCargoTags = GetCargoTags();
+            Tools.trace($"[货物编号查询测试] 编号数量={testCargoTags.Count}，编号列表=[{string.Join(", ", testCargoTags)}]");
  TestPocketMoveBatchCreation(
  new[] { "07", "08", "09", "10", "11", "12", "13", "14", "15", "17", "18", "19", "20", "21", "22", "23", "24", "25", },
  new[] { "01", "02", "03", "04"});

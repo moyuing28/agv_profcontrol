@@ -40,12 +40,12 @@ var result = CreateCargoMoveTask(new[]
 {
     new CargoMoveRequest
     {
-        TaskNo = "T001", CargoName = "迈巴赫", CargoTag = "000012",
+        TaskNo = "T001", CargoTag = "000012",
         ToMark = "63"
     },
     new CargoMoveRequest
     {
-        TaskNo = "T002", CargoName = "迈巴赫", CargoTag = "000014",
+        TaskNo = "T002", CargoTag = "000014",
         ToMark = "65"
     }
 });
@@ -63,7 +63,7 @@ else
 | 请求字段 | 含义 |
 | --- | --- |
 | `TaskNo` | 本次提交内唯一的客户任务编号 |
-| `CargoName` / `CargoTag` | 类型与编号共同标识一件货物；编号按字符串保存 |
+| `CargoTag` | 商品车唯一编号，按字符串保存；请求不再包含 CargoName |
 | `ToMark` | 最终货位的站点 Mark，不能填巷道名称 |
 | `AgvName` | 默认 `"00"` 自动选车，也可指定实际车辆名称 |
 | `Priority` | 默认 0；越小越优先，同值按提交顺序 |
@@ -209,11 +209,13 @@ else
 
 ## 货物管理和 HTTP 接口
 
-- `GetCargoTags(cargoName)`：返回此类型当前非空、去重、排序后的编号，含车载货物；列表不代表可搬运。
+所有业务货物统一为“商品车”，类型在 script.cs 的 CommodityCargoName 中固定。货物管理和点到点接单只传编号，编号在商品车中唯一；不支持通过修改接口切换类型。内部执行记录和查询结果仍保留 CargoName 用于身份核验，调用方无需选择。旧品牌货物不会自动转换，须在无任务时统一配置后使用。/api/cargoTypes 已移除，前端应移除类型下拉和该路由调用；/api/cargos 仅列出商品车。
+
+- `GetCargoTags()`：返回商品车当前非空、去重、排序后的编号，含车载货物；列表不代表可搬运。
 - `TraceCargoLocations(cargoTag)`：输出指定编号位置，不传参输出全部货物。
-- `AddCargo(cargoName, cargoTag, stationMark)`：在空货位对应朝向区域添加一件货物，类型需预先配置。
-- `UpdateCargo(cargoName, cargoTag, newCargoName, newCargoTag)`：修改类型及编号，位置不变。
-- `DeleteCargo(cargoName, cargoTag)`：删除指定单件实体，不清空整站。
+- `AddCargo(cargoTag, stationMark)`：在空货位对应朝向区域添加一件货物，宿主需预先配置名为“商品车”的 CargoInfo。
+- `UpdateCargo(cargoTag, newCargoTag)`：仅修改编号，位置不变。
+- `DeleteCargo(cargoTag)`：删除指定单件实体，不清空整站。
 - 货物编辑返回 `CargoEditResult`；存在未完成任务、批次、清障队列或巷道锁时拒绝。修改和删除要求货物唯一、数量为 1 且位于有效货位，拒绝编辑车载货物。
 - `GetSelectableStations(true/false)`：查询有货／空货位，不等于当前可派车或可直接放入。
 - `CreateMoveTask(toMark, agvName = "00")`：空车移动。
@@ -229,7 +231,7 @@ HTTP 服务当前监听 `http://*:8088`，启用 CORS。路由以 `HttpApi.cs` �
 | POST | `/api/createPocketMoveBatch` | 整巷批次接单 |
 | GET | `/api/batches`、`/api/batchDetail` | 批次列表和详情 |
 | POST | `/api/createMoveTask` | 空车移动 |
-| GET | `/api/cargoTypes`、`/api/cargos`、`/api/cargoStations` | 货物及站点查询 |
+| GET | `/api/cargos`、`/api/cargoStations` | 货物及站点查询 |
 
 点到点列表接单、候选预览和货物增删改目前为内部函数，不能把 C# 示例当成已有 HTTP 路由。`script.cs` 注释区保留后续 API 接入示例。
 
@@ -237,7 +239,7 @@ HTTP 服务当前监听 `http://*:8088`，启用 CORS。路由以 `HttpApi.cs` �
 
 `Init()` 先加载地图配置，清空“车库位”分类站点的全部货物区域，再按 `script.cs` 中启用的 AddCargo 调用生成测试货物、输出位置并初始化 AGV 停车。当前具体货物编号、位置及分组均以代码为准，不在文档重复维护固定清单。重新加载会执行这些初始化动作。
 
-当前启用 `TestCargoMoveCreation()`，在 `TaskCreator.cs` 中一次提交五条点到点任务。货物类型、编号和具体最终目标 Mark 在函数任务列表中填写；目的巷道按当前测试地图选择 01～04，五个最终货位不得重复。默认按列表顺序考虑、立即释放、自动选车；必填配置不完整时不提交。日志输出接收结果、硬前置、初始候选和等待原因。
+当前启用 `TestCargoMoveCreation()`，在 `TaskCreator.cs` 中一次提交五条点到点任务。商品车编号和具体最终目标 Mark 在函数任务列表中填写；目的巷道按当前测试地图选择 01～04，五个最终货位不得重复。默认按列表顺序考虑、立即释放、自动选车；必填配置不完整时不提交。日志输出接收结果、硬前置、初始候选和等待原因。
 
 整巷测试通过相邻的 `TestPocketMoveBatchCreation(...)` 调用切换，只启用一种。`script.cs` 调用旁的旧单件直搬注释已过时，实际以测试函数内容为准。两种模式共用 `TestCargoBatchQueries()`，启动时及每 10 秒打印进度。并行上限当前 4，调度周期 1000 ms。
 

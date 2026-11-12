@@ -59,23 +59,23 @@ namespace ProfControl
         {
             lock (cargoBatchSync)
             {
-                // 从现有库存选 5 件：填写 CargoName、CargoTag 和 ToMark，不新增或移动初始化货物。
+                // 从现有库存选 5 件：填写 CargoTag 和 ToMark，不新增或移动初始化货物。
                 // ToMark 填 01~04 巷道内具体货位的站点 Mark，不填巷道名称；5 个最终目标货位不能重复。
                 // 下列巷道分配仅为填写提示，可按实际地图调整。相同巷道可放多件，但需选择不同货位。
                 // 不填 Priority / ReleaseTime / AgvName：同优先级、立即释放、自动选车，按列表顺序优先考虑。
                 var tasks = new[]
                 {
-                    new CargoMoveRequest { TaskNo = "TEST001", CargoName = "迈巴赫", CargoTag = "000012", ToMark = "63" }, // 例如 01 巷道的具体货位
-                    new CargoMoveRequest { TaskNo = "TEST002", CargoName = "迈巴赫", CargoTag = "000014", ToMark = "65" }, // 例如 02 巷道的具体货位
-                    new CargoMoveRequest { TaskNo = "TEST003", CargoName = "迈巴赫", CargoTag = "000016", ToMark = "76" }, // 例如 03 巷道的具体货位
-                    new CargoMoveRequest { TaskNo = "TEST004", CargoName = "迈巴赫", CargoTag = "000018", ToMark = "80" }, // 例如 04 巷道的具体货位
-                    new CargoMoveRequest { TaskNo = "TEST005", CargoName = "迈巴赫", CargoTag = "000020", ToMark = "85" }  // 例如 01 巷道的另一个货位
+                    new CargoMoveRequest { TaskNo = "TEST001", CargoTag = "000012", ToMark = "63" }, // 例如 01 巷道的具体货位
+                    new CargoMoveRequest { TaskNo = "TEST002", CargoTag = "000014", ToMark = "65" }, // 例如 02 巷道的具体货位
+                    new CargoMoveRequest { TaskNo = "TEST003", CargoTag = "000016", ToMark = "76" }, // 例如 03 巷道的具体货位
+                    new CargoMoveRequest { TaskNo = "TEST004", CargoTag = "000018", ToMark = "80" }, // 例如 04 巷道的具体货位
+                    new CargoMoveRequest { TaskNo = "TEST005", CargoTag = "000020", ToMark = "85" }  // 例如 01 巷道的另一个货位
                 };
-                var incomplete = tasks.Where(t => string.IsNullOrWhiteSpace(t.CargoName) ||
+                var incomplete = tasks.Where(t =>
                     string.IsNullOrWhiteSpace(t.CargoTag) || string.IsNullOrWhiteSpace(t.ToMark)).Select(t => t.TaskNo).ToList();
                 if (incomplete.Count > 0)
                 {
-                    Tools.trace($"[五件点到点测试] 请先填写货物类型、编号和目标货位：{string.Join(", ", incomplete)}；未提交任何任务。");
+                    Tools.trace($"[五件点到点测试] 请先填写商品车编号和目标货位：{string.Join(", ", incomplete)}；未提交任何任务。");
                     return;
                 }
                 var result = CreateCargoMoveTask(tasks); // 五条一次提交，整批校验；不是循环调用五次接单。
@@ -104,10 +104,10 @@ namespace ProfControl
             cargo = null;
             error = null;
             var matches = API.Cargos.Where(c => API.GetOwner(c) is IStation s && s.Mark == mark).ToList();
-            if (matches.Count != 1 || matches[0].Quanlity != 1 || string.IsNullOrWhiteSpace(matches[0].Info?.Name) ||
+            if (matches.Count != 1 || matches[0].Quanlity != 1 || matches[0].Info?.Name != CommodityCargoName ||
                 string.IsNullOrWhiteSpace(Convert.ToString(matches[0].Tag)))
             {
-                error = $"货位 {mark} 必须有唯一的一件数量为1、类型和Tag非空的货物";
+                error = $"货位 {mark} 必须有唯一的一件数量为1、类型为商品车且Tag非空的货物";
                 return false;
             }
             var candidate = matches[0];

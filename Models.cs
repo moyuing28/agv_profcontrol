@@ -83,7 +83,6 @@ namespace ProfControl
         public class CargoMoveRequest
         {
             public string TaskNo { get; set; }
-            public string CargoName { get; set; }
             public string CargoTag { get; set; }
             public string ToMark { get; set; }
             public string AgvName { get; set; } = "00";

@@ -22,17 +22,17 @@ namespace ProfControl
                 foreach (var request in requests)
                 {
                     if (request == null || string.IsNullOrWhiteSpace(request.TaskNo) ||
-                        string.IsNullOrWhiteSpace(request.CargoName) || string.IsNullOrWhiteSpace(request.CargoTag) ||
+                        string.IsNullOrWhiteSpace(request.CargoTag) ||
                         string.IsNullOrWhiteSpace(request.ToMark))
-                        return Reject("任务编号、货物类型、货物编号和最终目标货位不能为空");
+                        return Reject("任务编号、商品车编号和最终目标货位不能为空");
                     if (!taskNos.Add(request.TaskNo)) return Reject($"任务编号重复：{request.TaskNo}");
-                    if (!cargoIds.Add((request.CargoName, request.CargoTag)))
-                        return Reject($"同一货物不能重复安排：{request.CargoName}/{request.CargoTag}");
+                    if (!cargoIds.Add((CommodityCargoName, request.CargoTag)))
+                        return Reject($"同一货物不能重复安排：{CommodityCargoName}/{request.CargoTag}");
                     if (!targets.Add(request.ToMark)) return Reject($"最终目标货位重复：{request.ToMark}");
-                    var matches = API.Cargos.Where(c => c.Info?.Name == request.CargoName &&
+                    var matches = API.Cargos.Where(c => c.Info?.Name == CommodityCargoName &&
                         Convert.ToString(c.Tag) == request.CargoTag).ToList();
                     if (matches.Count != 1 || !(API.GetOwner(matches[0]) is IStation source) ||
-                        !IsExpectedCargoAtStation(source.Mark, request.CargoName, request.CargoTag))
+                        !IsExpectedCargoAtStation(source.Mark, CommodityCargoName, request.CargoTag))
                         return Reject($"任务 {request.TaskNo} 的货物必须唯一且在站点上，数量为 1");
                     var sourcePocket = GetCargoPocket(GetStationPocketKey(source.Mark));
                     var targetPocket = GetCargoPocket(GetStationPocketKey(request.ToMark));
@@ -51,7 +51,7 @@ namespace ProfControl
                     batch.Items.Add(new CargoMoveItem
                     {
                         BatchId = batch.BatchId, TaskNo = request.TaskNo,
-                        CargoName = request.CargoName, CargoTag = request.CargoTag, TargetMark = request.ToMark,
+                        CargoName = CommodityCargoName, CargoTag = request.CargoTag, TargetMark = request.ToMark,
                         SourceMark = source.Mark, SourcePocketKey = sourcePocket.Key,
                         Priority = request.Priority, SubmissionOrder = batch.Items.Count,
                         ReleaseTime = request.ReleaseTime, RequestedAgv = agvName,

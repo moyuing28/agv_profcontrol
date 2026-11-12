@@ -2,16 +2,16 @@ namespace ProfControl
 {
     public partial class SampleProject
     {
-        public CargoEditResult AddCargo(string cargoName, string cargoTag, string stationMark)
+        public CargoEditResult AddCargo(string cargoTag, string stationMark)
         {
             lock (cargoBatchSync)
             {
-                var result = new CargoEditResult { CargoName = cargoName, CargoTag = cargoTag, StationMark = stationMark };
+                var result = new CargoEditResult { CargoName = CommodityCargoName, CargoTag = cargoTag, StationMark = stationMark };
                 if (!ValidateCargoEdit(result)) return result;
-                var info = API.GetCargoInfo(cargoName);
-                if (info == null) return FailCargoEdit(result, "货物类型不存在，请先配置 CargoInfo");
-                if (API.Cargos.Any(c => c.Info?.Name == cargoName && Convert.ToString(c.Tag) == cargoTag))
-                    return FailCargoEdit(result, "该类型和编号已存在");
+                var info = API.GetCargoInfo(CommodityCargoName);
+                if (info == null) return FailCargoEdit(result, "商品车类型不存在，请先在宿主配置名为“商品车”的 CargoInfo");
+                if (API.Cargos.Any(c => c.Info?.Name == CommodityCargoName && Convert.ToString(c.Tag) == cargoTag))
+                    return FailCargoEdit(result, "该商品车编号已存在");
                 var station = API.GetStation(stationMark);
                 var areaName = GetStationCargoArea(station, out var error);
                 if (areaName == null) return FailCargoEdit(result, error);
@@ -26,35 +26,31 @@ namespace ProfControl
             }
         }
 
-        public CargoEditResult UpdateCargo(string cargoName, string cargoTag, string newCargoName, string newCargoTag)
+        public CargoEditResult UpdateCargo(string cargoTag, string newCargoTag)
         {
             lock (cargoBatchSync)
             {
-                var result = new CargoEditResult { CargoName = cargoName, CargoTag = cargoTag };
+                var result = new CargoEditResult { CargoName = CommodityCargoName, CargoTag = cargoTag };
                 if (!ValidateCargoEdit(result)) return result;
-                if (string.IsNullOrWhiteSpace(newCargoName) || string.IsNullOrWhiteSpace(newCargoTag))
-                    return FailCargoEdit(result, "新类型和新编号不能为空");
-                var newInfo = API.GetCargoInfo(newCargoName);
-                if (newInfo == null) return FailCargoEdit(result, "新货物类型不存在，请先配置 CargoInfo");
+                if (string.IsNullOrWhiteSpace(newCargoTag))
+                    return FailCargoEdit(result, "新编号不能为空");
                 var cargo = FindEditableCargo(result);
                 if (cargo == null) return result;
-                if (API.Cargos.Any(c => !object.ReferenceEquals(c, cargo) && c.Info?.Name == newCargoName &&
+                if (API.Cargos.Any(c => !object.ReferenceEquals(c, cargo) && c.Info?.Name == CommodityCargoName &&
                     Convert.ToString(c.Tag) == newCargoTag))
-                    return FailCargoEdit(result, "新类型和编号已被其他货物使用");
-                cargo.Info = newInfo;
+                    return FailCargoEdit(result, "新编号已被其他商品车使用");
                 cargo.Tag = newCargoTag;
-                result.CargoName = newCargoName;
                 result.CargoTag = newCargoTag;
                 result.Success = true;
                 return result;
             }
         }
 
-        public CargoEditResult DeleteCargo(string cargoName, string cargoTag)
+        public CargoEditResult DeleteCargo(string cargoTag)
         {
             lock (cargoBatchSync)
             {
-                var result = new CargoEditResult { CargoName = cargoName, CargoTag = cargoTag };
+                var result = new CargoEditResult { CargoName = CommodityCargoName, CargoTag = cargoTag };
                 if (!ValidateCargoEdit(result)) return result;
                 var cargo = FindEditableCargo(result);
                 if (cargo == null) return result;
@@ -70,8 +66,8 @@ namespace ProfControl
 
         bool ValidateCargoEdit(CargoEditResult result)
         {
-            if (string.IsNullOrWhiteSpace(result.CargoName) || string.IsNullOrWhiteSpace(result.CargoTag))
-                result.Error = "货物类型和编号不能为空";
+            if (string.IsNullOrWhiteSpace(result.CargoTag))
+                result.Error = "商品车编号不能为空";
             else if (HasOpenCargoBatch() || TaskInfos.Any(t => t.Status != TaskStatus.Finished) ||
                 PendingClearanceBatches.Count > 0 || PocketLocks.Count > 0)
                 result.Error = "当前存在未完成任务、批次或巷道锁，请结束后再编辑货物";
@@ -84,7 +80,7 @@ namespace ProfControl
                 Convert.ToString(c.Tag) == result.CargoTag).ToList();
             if (matches.Count != 1)
             {
-                FailCargoEdit(result, matches.Count == 0 ? "未找到指定货物" : "该类型和编号匹配到多件货物");
+                FailCargoEdit(result, matches.Count == 0 ? "未找到指定货物" : "该编号匹配到多件商品车");
                 return null;
             }
             var cargo = matches[0];

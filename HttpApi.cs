@@ -427,29 +427,6 @@ namespace ProfControl
                 // 说明：前端一次性拉全量，筛选/分页都在前端做（货件量级小，联动零延迟）。
                 // 将来货件过千再改成服务端过滤。
 
-                //货物类型列表：供「货物类型」下拉使用（去重 + 排序）
-                app.MapGet("/api/cargoTypes", async (HttpContext ctx) =>
-                {
-                    var names = new List<string>();
-                    try
-                    {
-                        lock (cargoBatchSync)
-                        {
-                            foreach (var cargo in API.Cargos)
-                            {
-                                var n = cargo.Info?.Name;
-                                if (!string.IsNullOrWhiteSpace(n) && !names.Contains(n)) names.Add(n);
-                            }
-                        }
-                    }
-                    catch (Exception ex) { Tools.trace($"[货物类型] 读取失败：{ex.Message}"); }
-
-                    names.Sort(StringComparer.Ordinal);
-                    var arr = new JArray();
-                    foreach (var n in names) arr.Add(n);
-                    return Results.Text(arr.ToString(), API.ContentTypeJson);
-                });
-
                 //货物清单：全量货物 + 归属位置（站点 / AGV）
                 // 字段：CargoName 类型 / CargoTag 编号 / Quantity 数量
                 //       OwnerType 位置类型（站点|AGV|未知）/ Mark 站点号 / PocketName 所属巷道 / AgvName 携带车辆
@@ -461,7 +438,7 @@ namespace ProfControl
                     {
                         lock (cargoBatchSync)
                         {
-                            foreach (var cargo in API.Cargos)
+                            foreach (var cargo in API.Cargos.Where(c => c.Info?.Name == CommodityCargoName))
                             {
                                 var ownerType = "未知";
                                 var mark = "";
@@ -501,7 +478,7 @@ namespace ProfControl
                     {
                         lock (cargoBatchSync)
                         {
-                            foreach (var cargo in API.Cargos)
+                            foreach (var cargo in API.Cargos.Where(c => c.Info?.Name == CommodityCargoName))
                             {
                                 if (API.GetOwner(cargo) is IStation s && !string.IsNullOrEmpty(s.Mark) && !cargoByMark.ContainsKey(s.Mark))
                                     cargoByMark[s.Mark] = cargo;

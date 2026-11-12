@@ -3,15 +3,15 @@ namespace ProfControl
     public partial class SampleProject
     {
 
-        // 返回指定货物类型当前存在的非空 Tag，用于编号下拉列表。
-        public List<string> GetCargoTags(string cargoName)
+        // 返回商品车当前存在的非空 Tag，用于编号下拉列表。
+        public List<string> GetCargoTags()
         {
             lock (cargoBatchSync)
             {
-                if (string.IsNullOrWhiteSpace(cargoName)) return new List<string>();
+
 
                 return API.Cargos
-                    .Where(c => c.Info?.Name == cargoName)
+                    .Where(c => c.Info?.Name == CommodityCargoName)
                     .Select(c => Convert.ToString(c.Tag))
                     .Where(tag => !string.IsNullOrWhiteSpace(tag))
                     .Distinct(StringComparer.Ordinal)
