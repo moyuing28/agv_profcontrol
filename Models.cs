@@ -23,6 +23,8 @@ namespace ProfControl
             GoPickEntrance,
             GoPickExit,
             GoDropEntrance,
+            // 已到卸货巷道入口，等待入口重定位完成后再下发卸货动作。
+            InitPosition,
             GoParkingExit,
             NeedsReview,
         }

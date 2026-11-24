@@ -135,6 +135,7 @@ namespace ProfControl
                 case TaskStatus.Picked: return "已取货，等待目标巷道准入和卸货位分配";
                 case TaskStatus.GoPickExit: return "卸货位已确定，正在驶出取货巷道";
                 case TaskStatus.GoDropEntrance: return "前往卸货巷道入口";
+                case TaskStatus.InitPosition: return "已到卸货巷道入口，等待重定位完成";
                 case TaskStatus.GoDrop: return "进入巷道，前往卸货位";
                 case TaskStatus.Dropping: return "正在卸货";
                 case TaskStatus.Dropped: return "货物已放下，等待续接下一件货物或回家";
