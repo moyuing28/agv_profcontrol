@@ -334,8 +334,8 @@ namespace ProfControl
                             ["CompletedCount"] = b.CompletedCount,
                             ["NeedsReviewCount"] = b.NeedsReviewCount,
                             ["CreatedTime"] = b.CreatedTime.ToString("yyyy-MM-dd HH:mm:ss"),
-                            ["CompletedTime"] = b.CompletedTime?.ToString("yyyy-MM-dd HH:mm:ss"),
                             ["CustomerCompletedTime"] = b.CustomerCompletedTime?.ToString("yyyy-MM-dd HH:mm:ss"),
+                            ["CompletedTime"] = b.CompletedTime?.ToString("yyyy-MM-dd HH:mm:ss"),
                         });
                     }
                     return Results.Text(arr.ToString(), API.ContentTypeJson);
@@ -389,18 +389,83 @@ namespace ProfControl
                     }
                     return Results.Text(arr.ToString(), API.ContentTypeJson);
                 });
-                //创建移动任务
-                app.MapPost("/api/createMoveTask", async (HttpContext context) =>
+                //创建移库任务
+                //移库任务：由「货位→货位」改为「货物→货位」
+                // 入参：cargoTag（商品车编号）/ toMark（最终目标货位）/ agvName（"00"=自动）/ priority
+                // 起点由后端按 CargoTag 实时解析，调用方不再传 fromMark。
+                // TaskNo 先写死 "T001"，后续由后端生成。
+                app.MapPost("/api/createStationMoveTask", async (HttpContext context) =>
                 {
-                	JObject jobj = null;
+                    JObject jobj = null;
                     try { jobj = await context.AsJObject(); }
                     catch { }
 
-                    
+                    string cargoTag = jobj?["cargoTag"]?.ToString();
                     string toMark = jobj?["toMark"]?.ToString();
                     string agvName = jobj?["agvName"]?.ToString();
-              
-                	if (string.IsNullOrWhiteSpace(toMark))
+                    int priority = 0;
+                    try { priority = jobj?["priority"]?.ToObject<int>() ?? 0; } catch { }
+
+                    if (string.IsNullOrWhiteSpace(cargoTag) || string.IsNullOrWhiteSpace(toMark))
+                    {
+                        context.Response.StatusCode = 400;
+                        return Results.Text(
+                            new JObject { ["Success"] = false, ["message"] = "货物编号和目标货位均不能为空" }.ToString(),
+                            API.ContentTypeJson);
+                    }
+
+                    Tools.trace($"createStationMoveTask: 收到移库任务 {CommodityCargoName}/{cargoTag} -> {toMark}");
+
+                    var result = CreateCargoMoveTask(new[]
+                    {
+                        new CargoMoveRequest
+                        {
+                            TaskNo = "T001",
+                            CargoTag = cargoTag.Trim(),
+                            ToMark = toMark.Trim(),
+                            AgvName = string.IsNullOrWhiteSpace(agvName) ? "00" : agvName,
+                            Priority = priority,
+                        }
+                    });
+
+                    if (result == null || !result.Success)
+                    {
+                        context.Response.StatusCode = 400;
+                        return Results.Text(
+                            new JObject
+                            {
+                                ["Success"] = false,
+                                ["message"] = (result == null || string.IsNullOrWhiteSpace(result.Error))
+                                    ? "移库任务创建失败"
+                                    : result.Error
+                            }.ToString(),
+                            API.ContentTypeJson);
+                    }
+
+                    return Results.Text(
+                        new JObject
+                        {
+                            ["Success"] = true,
+                            ["batchId"] = result.BatchId ?? "",
+                            ["cargoTag"] = cargoTag.Trim(),
+                            ["toMark"] = toMark.Trim(),
+                            ["message"] = "移库任务已登记，等待调度"
+                        }.ToString(),
+                        API.ContentTypeJson);
+                });
+
+                //创建移动任务
+                app.MapPost("/api/createMoveTask", async (HttpContext context) =>
+                {
+                    JObject jobj = null;
+                    try { jobj = await context.AsJObject(); }
+                    catch { }
+
+
+                    string toMark = jobj?["toMark"]?.ToString();
+                    string agvName = jobj?["agvName"]?.ToString();
+
+                    if (string.IsNullOrWhiteSpace(toMark))
                     {
                         context.Response.StatusCode = 400;
                         return Results.Text(
@@ -418,8 +483,8 @@ namespace ProfControl
                             new JObject { ["message"] = "任务创建失败（站点不存在/巷道锁定等），详见运行日志" }.ToString(),
                             API.ContentTypeJson);
                     }
-                    
-                    
+
+
                     return Results.Text("创建移动任务成功！");
                 });
 
@@ -531,11 +596,123 @@ namespace ProfControl
                     }
                     return Results.Text(arr.ToString(), API.ContentTypeJson);
                 });
-                
-                
+
+                // ============ 货物编辑（新增 / 修改 / 删除）============
+                // 1112 起货物类型固定为「商品车」（CommodityCargoName），调用方只传编号：
+                //   CargoEditor.AddCargo(cargoTag, stationMark)
+                //   CargoEditor.UpdateCargo(cargoTag, newCargoTag)
+                //   CargoEditor.DeleteCargo(cargoTag)
+                // 校验都在 CargoEditor.cs（锁、唯一性、空站点等），这里只解析入参并透传 CargoEditResult。
+                // 返回字段：Success / Error / CargoName(商品车) / CargoTag / StationMark
+
+                //新增商品车：编号 + 目标空货位（站点必须为空）
+                app.MapPost("/api/cargoAdd", async (HttpContext context) =>
+                {
+                    JObject jobj = null;
+                    try { jobj = await context.AsJObject(); }
+                    catch { }
+
+                    string cargoTag = jobj?["cargoTag"]?.ToString();
+                    string stationMark = jobj?["stationMark"]?.ToString();
+
+                    if (string.IsNullOrWhiteSpace(cargoTag) || string.IsNullOrWhiteSpace(stationMark))
+                    {
+                        context.Response.StatusCode = 400;
+                        return Results.Text(
+                            new JObject { ["Success"] = false, ["Error"] = "商品车编号和目标货位均不能为空" }.ToString(),
+                            API.ContentTypeJson);
+                    }
+
+                    Tools.trace($"cargoAdd: {CommodityCargoName} / {cargoTag} -> 站点 {stationMark}");
+                    var result = AddCargo(cargoTag.Trim(), stationMark.Trim());
+                    if (!result.Success) context.Response.StatusCode = 400;
+                    return Results.Text(
+                        new JObject
+                        {
+                            ["Success"] = result.Success,
+                            ["Error"] = result.Error ?? "",
+                            ["CargoName"] = result.CargoName ?? "",
+                            ["CargoTag"] = result.CargoTag ?? "",
+                            ["StationMark"] = result.StationMark ?? "",
+                        }.ToString(),
+                        API.ContentTypeJson);
+                });
+
+                //修改商品车：按原编号定位，只改编号，保持原站点
+                app.MapPost("/api/cargoUpdate", async (HttpContext context) =>
+                {
+                    JObject jobj = null;
+                    try { jobj = await context.AsJObject(); }
+                    catch { }
+
+                    string cargoTag = jobj?["cargoTag"]?.ToString();
+                    string newCargoTag = jobj?["newCargoTag"]?.ToString();
+
+                    if (string.IsNullOrWhiteSpace(cargoTag))
+                    {
+                        context.Response.StatusCode = 400;
+                        return Results.Text(
+                            new JObject { ["Success"] = false, ["Error"] = "原商品车编号不能为空" }.ToString(),
+                            API.ContentTypeJson);
+                    }
+                    if (string.IsNullOrWhiteSpace(newCargoTag))
+                    {
+                        context.Response.StatusCode = 400;
+                        return Results.Text(
+                            new JObject { ["Success"] = false, ["Error"] = "新编号不能为空" }.ToString(),
+                            API.ContentTypeJson);
+                    }
+
+                    Tools.trace($"cargoUpdate: {CommodityCargoName} / {cargoTag} -> {newCargoTag}");
+                    var result = UpdateCargo(cargoTag.Trim(), newCargoTag.Trim());
+                    if (!result.Success) context.Response.StatusCode = 400;
+                    return Results.Text(
+                        new JObject
+                        {
+                            ["Success"] = result.Success,
+                            ["Error"] = result.Error ?? "",
+                            ["CargoName"] = result.CargoName ?? "",
+                            ["CargoTag"] = result.CargoTag ?? "",
+                            ["StationMark"] = result.StationMark ?? "",
+                        }.ToString(),
+                        API.ContentTypeJson);
+                });
+
+                //删除商品车：按编号定位（只删这一件，不清空货位、不动托盘）
+                app.MapPost("/api/cargoDelete", async (HttpContext context) =>
+                {
+                    JObject jobj = null;
+                    try { jobj = await context.AsJObject(); }
+                    catch { }
+
+                    string cargoTag = jobj?["cargoTag"]?.ToString();
+
+                    if (string.IsNullOrWhiteSpace(cargoTag))
+                    {
+                        context.Response.StatusCode = 400;
+                        return Results.Text(
+                            new JObject { ["Success"] = false, ["Error"] = "商品车编号不能为空" }.ToString(),
+                            API.ContentTypeJson);
+                    }
+
+                    Tools.trace($"cargoDelete: {CommodityCargoName} / {cargoTag}");
+                    var result = DeleteCargo(cargoTag.Trim());
+                    if (!result.Success) context.Response.StatusCode = 400;
+                    return Results.Text(
+                        new JObject
+                        {
+                            ["Success"] = result.Success,
+                            ["Error"] = result.Error ?? "",
+                            ["CargoName"] = result.CargoName ?? "",
+                            ["CargoTag"] = result.CargoTag ?? "",
+                            ["StationMark"] = result.StationMark ?? "",
+                        }.ToString(),
+                        API.ContentTypeJson);
+                });
+
+
 
             });
         }
     }
 }
-                                          

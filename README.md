@@ -231,9 +231,11 @@ HTTP 服务当前监听 `http://*:8088`，启用 CORS。路由以 `HttpApi.cs` �
 | POST | `/api/createPocketMoveBatch` | 整巷批次接单 |
 | GET | `/api/batches`、`/api/batchDetail` | 批次列表和详情 |
 | POST | `/api/createMoveTask` | 空车移动 |
+| POST | `/api/createStationMoveTask` | 单条商品车点到点接单，内部调用列表接口 |
+| POST | `/api/cargoAdd`、`/api/cargoUpdate`、`/api/cargoDelete` | 按编号添加、修改、删除商品车 |
 | GET | `/api/cargos`、`/api/cargoStations` | 货物及站点查询 |
 
-点到点列表接单、候选预览和货物增删改目前为内部函数，不能把 C# 示例当成已有 HTTP 路由。`script.cs` 注释区保留后续 API 接入示例。
+HTTP 已提供单条点到点接单和商品车增删改；多个点到点任务一次提交及候选预览仍使用内部函数。入口同时属于车库位时，巷道货位数、所属巷道映射及站点视图均包含该入口库位。批次列表同时返回 CustomerCompletedTime 和 CompletedTime。`script.cs` 注释区保留内部函数示例。
 
 ## 初始化与当前测试
 
