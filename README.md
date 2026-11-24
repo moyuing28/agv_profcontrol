@@ -167,17 +167,17 @@ else
 ```text
 派车 → GoParkingExit（如适用）
 → GoPickEntrance → GoPick → Picking → Picked
-→ GoPickExit → GoDropEntrance → GoDrop → Dropping → Dropped
+→ GoPickExit → GoDropEntrance → InitPosition → GoDrop → Dropping → Dropped
 → 成功续单后 Finished，或 GoHome → 停车完成后 Finished
 ```
 
 项目保留现有物理执行流程：取货后仍需驶到源入口才登记延迟解锁，不采用仿真器的“Pickup 完成即解源锁”。锁释放统一至少延迟 1 秒，实际释放受每秒轮询影响。目标锁在取货完成后的卸货准入阶段申请。
 
-源位等于入口时直接向源位下发 pick，省去入口普通移动；取货完成且卸货准入通过后，省去同点源端驶出移动，按原约定登记源锁延迟释放。目标位等于入口时直接下发 drop，不先发 detectObject。深处取货仍先到入口，深处跨巷道放货仍先在入口执行 detectObject，到位、动作完成且卸货准入通过后才下发 drop；同巷道直接前往目标位并持续持锁。卸完优先续单，不额外经过目标出口；成功后把旧目标锁交接到下一段任务，确认驶出后才延迟释放。无可接任务则动态停车，停车暂不可用时保留锁等待。锁释放和交接检查归属。
+源位等于入口时直接向源位下发 pick，省去入口普通移动；取货完成且卸货准入通过后，省去同点源端驶出移动，按原约定登记源锁延迟释放。目标位等于入口时直接下发 drop，不先发 detectObject。深处取货仍先到入口，深处跨巷道放货仍先在入口执行 detectObject；到达入口只确认 `Arrived`，随后进入 `InitPosition` 单独等待入口重定位完成反馈（`StationActionFinished`），重定位完成且卸货准入通过后才下发 drop。到达与动作完成拆成两个状态机，避免同一次轮询里既要确认到位又要读到动作完成。同巷道直接前往目标位并持续持锁。卸完优先续单，不额外经过目标出口；成功后把旧目标锁交接到下一段任务，确认驶出后才延迟释放。无可接任务则动态停车，停车暂不可用时保留锁等待。锁释放和交接检查归属。
 
 点到点取放前及完成反馈时复核货物、预约、锁、No-hole 和未来客户保护；反馈成功才同步库存及进度。指令异常或归属不符进入 `NeedsReview`，不自动释放尚需核对的资源或重复派发；客户已完成的状态不因车辆收尾异常撤销。
 
-`SimulateStationActions = true` 时，取货、放货和入口检测按 `PickDropDelay`（当前 10 秒）仿真；false 时等待 `ActionState == "FINISHED"`，无延时成功兜底。入口检测仿真计时从前往入口指令下发开始，包含行驶时间。
+`SimulateStationActions = true` 时，取货、放货和入口重定位按 `PickDropDelay`（当前 10 秒）仿真；false 时等待 `ActionState == "FINISHED"`，无延时成功兜底。入口重定位仿真计时从车辆到达入口、进入 `InitPosition` 开始。
 
 实机对接层应在新动作开始时更新／复位 ActionState，避免沿用上一动作结果。当前脚本通过 `MoveToOtherArea` 同步软件货物归属，对接层不应重复转移；软件校验不等于实物检测。路线执行、路口冲突和安全避障依赖宿主及车辆控制系统。
 

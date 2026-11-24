@@ -102,8 +102,20 @@ namespace ProfControl
                             break;
 
                         case TaskStatus.GoDropEntrance:
-                            if (Arrived(info, info.DropEntranceMark) && StationActionFinished(info) && DropReady(info))
+                            // 到达入口与入口动作完成不是同一时刻，先只确认到达，再由 InitPosition 单独等待完成反馈。
+                            if (Arrived(info, info.DropEntranceMark))
+                            {
+                                info.Status = TaskStatus.InitPosition;
+                                info.StateTime = DateTime.Now;
+                                Tools.trace($"[入口重定位] AGV={info.WorkAgv.Name}, 已到达卸货巷道入口 {info.DropEntranceMark}，等待重定位完成");
+                            }
+                            break;
+
+                        case TaskStatus.InitPosition:
+                            if (StationActionFinished(info) && DropReady(info))
                                 MoveStage(info, info.ToMark, "drop", TaskStatus.GoDrop);
+                            Tools.trace("待前往卸车");
+
                             break;
 
                         case TaskStatus.GoDrop:
@@ -574,3 +586,4 @@ namespace ProfControl
 
     }
 }
+    
