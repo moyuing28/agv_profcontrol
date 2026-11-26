@@ -154,6 +154,7 @@ namespace ProfControl
         {
             lock (cargoBatchSync)
             {
+                if (globalPaused) return RejectCargoBatch("全局暂停期间不接受新批次");
                 if (HasOpenCargoBatch())
                     return RejectCargoBatch("当前搬运批次尚未结束，不能重复创建或创建其他批次");
                 if (TaskInfos.Any(t => t.Status != TaskStatus.Finished) || PendingClearanceBatches.Count > 0)

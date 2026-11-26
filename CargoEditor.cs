@@ -66,7 +66,9 @@ namespace ProfControl
 
         bool ValidateCargoEdit(CargoEditResult result)
         {
-            if (string.IsNullOrWhiteSpace(result.CargoTag))
+            if (globalPaused)
+                result.Error = "全局暂停期间禁止普通货物编辑；故障货物处理接口尚未实现";
+            else if (string.IsNullOrWhiteSpace(result.CargoTag))
                 result.Error = "商品车编号不能为空";
             else if (HasOpenCargoBatch() || TaskInfos.Any(t => t.Status != TaskStatus.Finished) ||
                 PendingClearanceBatches.Count > 0 || PocketLocks.Count > 0)

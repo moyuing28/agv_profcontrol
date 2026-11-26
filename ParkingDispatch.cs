@@ -118,7 +118,7 @@ namespace ProfControl
                 if (slot == null) continue;
                 lane.Owner = agv;
                 parkingTrips[agv] = new ParkingTrip { Lane = lane, Slot = slot };
-                agv.GoTo(lane.Gate);
+                NavigateBusiness(agv, lane.Gate);
                 Tools.trace($"[动态回家] AGV={agv.Name}, 入口={lane.Gate}, 预留停车位={slot}");
                 return true;
             }
@@ -142,7 +142,7 @@ namespace ProfControl
                 if (!agv.IsFree()) continue;
                 if (!trip.Entering && agv.API.On == trip.Lane.Gate)
                 {
-                    agv.GoTo(trip.Slot);
+                    NavigateBusiness(agv, trip.Slot);
                     trip.Entering = true;
                 }
                 else if (trip.Entering && agv.API.On == trip.Slot)

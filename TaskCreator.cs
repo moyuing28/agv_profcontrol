@@ -7,6 +7,11 @@ namespace ProfControl
         {
             lock (cargoBatchSync)
             {
+                if (globalPaused)
+                {
+                    Tools.trace("CreateMoveTask: 全局暂停期间不接受新任务");
+                    return false;
+                }
                 if (HasOpenCargoBatch())
                 {
                     Tools.trace("CreateMoveTask: 当前搬运批次尚未结束");

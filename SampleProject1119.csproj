@@ -145,4 +145,7 @@
     <Compile Include="D:\procontrol\ProfControlV8_Newest\www\wwwroot\ProfControlV8Update\script\SampleProject1119\TaskCreator.cs" />
     <Compile Include="D:\procontrol\ProfControlV8_Newest\www\wwwroot\ProfControlV8Update\script\SampleProject1119\TaskExecutor.cs" />
   </ItemGroup>
+  <ItemGroup>
+    <Compile Include="GlobalPause.cs" />
+  </ItemGroup>
 </Project>

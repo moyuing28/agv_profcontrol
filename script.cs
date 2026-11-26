@@ -110,6 +110,9 @@ namespace ProfControl
             //SimulationDataExporter.ExportAll();//提取matlab仿真需要的地图数据用于算法验证，没事别打开
 
             // ===== 留给后续 API 接入的内部函数示例，请保留注释 =====
+            // var pause = PauseGlobal(); // 一键全局暂停，无参数；重复调用不覆盖快照。
+            // var pauseStatus = GetGlobalPauseStatus(); // Stage=Paused 且 CanResume=true 才满足软件恢复条件。
+            // var resume = ResumeGlobal(); // 恢复原导航和业务；不满足条件时 Success=false，查看 Issues。
             // CreateMoveTask("53", "20"); // 空车移动：目标站点 Mark、车辆名称；"00" 自动选车。
             // var cargoTags = GetCargoTags(); // 查询商品车编号下拉列表，返回 List<string>，例如 "000001"、"000002"；无匹配时为空列表。
             // var addResult = AddCargo("000013", "目标空货位Mark"); // 在对应朝向区域添加一件货物；宿主需配置商品车类型，Tag 不得重复。
@@ -152,6 +155,7 @@ namespace ProfControl
 //            TestCargoMoveCreation(); // 单件跨巷道直搬：自动选最外侧货物及异巷道合法放货位，只提交一条；与整巷测试二选一。
             TestCargoBatchQueries(); // 两种搬运共用同一批次详情查询。
             StartScheduler();
+            TestGlobalPauseResume(30, 15, 90); // 仅仿真：批次运行30秒后暂停，至少保持15秒，满足条件后恢复；不用时注释此行。
             // 查询测试：每 10 秒输出最新状态，不需要时直接注释这一行。
             API.SetInterval(tc => TestCargoBatchQueries(), 10000); // 两种搬运共用，打印货物、目标位置及全部步骤。
             // API.SetInterval(tc => TraceCargoLocations("000001"), 10000); // 可选的货物位置查询。
@@ -170,6 +174,91 @@ namespace ProfControl
         }
 
         #endregion
+
+        // 在现有批次上测试，不额外创建任务；自动恢复仅用于仿真。
+        void TestGlobalPauseResume(int pauseAfterSeconds, int holdSeconds, int timeoutSeconds)
+        {
+            if (!SimulateStationActions)
+            {
+                Tools.trace("[全局暂停恢复测试] 当前为实机动作模式，跳过自动测试");
+                return;
+            }
+            var started = DateTime.UtcNow;
+            DateTime? pausedAt = null;
+            var lastPrinted = DateTime.MinValue;
+            string pauseId = null;
+            Dictionary<string, TaskStatus> savedStages = null;
+            Tools.trace($"[全局暂停恢复测试] 已安排：{pauseAfterSeconds}秒后暂停，至少保持{holdSeconds}秒，等待超时{timeoutSeconds}秒");
+            API.SetInterval(tc =>
+            {
+                lock (cargoBatchSync)
+                {
+                    try
+                    {
+                        var now = DateTime.UtcNow;
+                        if (!pausedAt.HasValue)
+                        {
+                            if ((now - started).TotalSeconds < pauseAfterSeconds) return;
+                            if (globalPaused)
+                            {
+                                Tools.trace("[全局暂停恢复测试] 已存在其他暂停，退出测试，不自动恢复");
+                                tc.Cancel();
+                                return;
+                            }
+                            Tools.trace("[全局暂停恢复测试] 开始暂停；当前任务：" + string.Join("；", TaskInfos
+                                .Where(t => t.Status != TaskStatus.Finished)
+                                .Select(t => $"AGV={t.WorkAgv?.Name ?? "待分配"}, 阶段={t.Status}, 取货={t.FromMark}, 目标={t.ToMark}")));
+                            var paused = PauseGlobal();
+                            pauseId = paused.PauseId;
+                            pausedAt = now;
+                            savedStages = TaskInfos.ToDictionary(t => t.TaskId, t => t.Status);
+                            Tools.trace("[全局暂停恢复测试] 暂停返回：" + JsonConvert.SerializeObject(paused));
+                            lastPrinted = now;
+                            return;
+                        }
+
+                        var status = GetGlobalPauseStatus();
+                        if (!status.IsPaused || status.PauseId != pauseId)
+                        {
+                            Tools.trace("[全局暂停恢复测试] 暂停已被其他操作改变，退出测试，不自动恢复");
+                            tc.Cancel();
+                            return;
+                        }
+                        if (TaskInfos.Count() != savedStages.Count || TaskInfos.Any(t =>
+                            !savedStages.TryGetValue(t.TaskId, out var stage) || stage != t.Status))
+                        {
+                            Tools.trace("[全局暂停恢复测试] 检查失败：暂停期间业务任务或阶段发生变化，保持暂停");
+                            tc.Cancel();
+                            return;
+                        }
+                        if ((now - lastPrinted).TotalSeconds >= 5)
+                        {
+                            Tools.trace("[全局暂停恢复测试] 业务阶段保持不变；暂停状态：" + JsonConvert.SerializeObject(status));
+                            lastPrinted = now;
+                        }
+                        var elapsed = (now - pausedAt.Value).TotalSeconds;
+                        if (elapsed >= timeoutSeconds)
+                        {
+                            Tools.trace("[全局暂停恢复测试] 等待超时，保持全局暂停：" + JsonConvert.SerializeObject(status));
+                            tc.Cancel();
+                            return;
+                        }
+                        if (elapsed < holdSeconds || !status.CanResume) return;
+                        var resumed = ResumeGlobal();
+                        Tools.trace("[全局暂停恢复测试] 恢复返回：" + JsonConvert.SerializeObject(resumed));
+                        Tools.trace(resumed.Success && !resumed.IsPaused
+                            ? "[全局暂停恢复测试] 自动恢复完成，请继续观察原批次是否完成、取放货是否重复"
+                            : "[全局暂停恢复测试] 恢复失败，保持暂停，请查看返回原因");
+                        tc.Cancel();
+                    }
+                    catch (Exception ex)
+                    {
+                        Tools.trace("[全局暂停恢复测试] 测试异常，不再自动操作：" + ex.Message);
+                        tc.Cancel();
+                    }
+                }
+            }, 1000);
+        }
 
 
 
@@ -208,4 +297,5 @@ namespace ProfControl
 
 
 
-                                                                   
+
+          

@@ -11,6 +11,11 @@ namespace ProfControl
 
         void ExecuteMoveTasksCore()
         {
+            if (globalPaused)
+            {
+                UpdateGlobalPause();
+                return;
+            }
             UpdateDelayedLockReleases();
             UpdateExitLockReleases();
             UpdateParkingTrips();
@@ -345,6 +350,7 @@ namespace ProfControl
         bool StationActionFinished(TaskInfo info)
         {
             if (info.WorkAgv == null) return false;
+            if (completedStationActions.Contains(info)) return true;
             if (SimulateStationActions) return StateTimeout(info);
             return info.WorkAgv.GetValue<string>("ActionState") == "FINISHED";
         }
@@ -531,7 +537,8 @@ namespace ProfControl
                 MoveStage(info, mark, "pick", TaskStatus.GoPick);
                 return;
             }
-            info.WorkAgv.GoTo(mark);
+            completedStationActions.Remove(info);
+            NavigateBusiness(info.WorkAgv, mark);
             info.Status = status;
             info.LastWaitReason = null;
             info.StateTime = DateTime.Now;
@@ -586,4 +593,4 @@ namespace ProfControl
 
     }
 }
-    
+

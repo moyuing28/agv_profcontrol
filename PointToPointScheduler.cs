@@ -8,6 +8,7 @@ namespace ProfControl
             lock (cargoBatchSync)
             {
                 PointToPointCreateResult Reject(string error) => new PointToPointCreateResult { Error = error };
+                if (globalPaused) return Reject("全局暂停期间不接受新任务");
                 if (tasks == null) return Reject("任务列表不能为空");
                 var requests = tasks.ToList();
                 if (requests.Count == 0) return Reject("任务列表不能为空");
